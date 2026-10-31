@@ -22,4 +22,10 @@ class ProtoTest {
 
         assertArrayEquals(byteArrayOf(0x08, 0xff.toByte(), 0xff.toByte(), 0xff.toByte(), 0xff.toByte(), 0xff.toByte(), 0xff.toByte(), 0xff.toByte(), 0xff.toByte(), 0xff.toByte(), 0x01), payload)
     }
+
+    @Test
+    fun exposesSearchAndMediaKeyCodesForRemoteCommands() {
+        assertEquals(84, TvKey.SEARCH.androidCode)
+        assertEquals(85, TvKey.MEDIA_PLAY_PAUSE.androidCode)
+    }
 }

@@ -2,6 +2,7 @@ package com.realme.tvremote.ui
 
 import android.content.Context
 import android.content.res.ColorStateList
+import android.animation.ValueAnimator
 import android.graphics.Canvas
 import android.graphics.Paint
 import android.graphics.Path
@@ -17,6 +18,7 @@ import android.view.View
 import android.view.ViewGroup
 import android.widget.FrameLayout
 import android.widget.GridLayout
+import android.widget.EditText
 import android.widget.LinearLayout
 import android.widget.ProgressBar
 import android.widget.ScrollView
@@ -43,6 +45,8 @@ class RemoteScreen(
     private val onRemoteKey: (TvKey) -> Unit,
     private val onKeyboard: () -> Unit,
     private val onSettings: () -> Unit,
+    private val onVoiceSearch: (String) -> Unit,
+    private val onSendSearch: (String) -> Unit,
 ) {
     val root = LinearLayout(context).apply {
         orientation = LinearLayout.VERTICAL
@@ -79,6 +83,12 @@ class RemoteScreen(
     }
     private val scanButton: View
     private val devicesConnectLabel: TextView
+    private val voiceQuery = EditText(context)
+    private val voiceHint = label("Pilih bahasa, lalu ketuk mikrofon untuk mulai.", 10, MUTED)
+    private val voiceLanguageButton: TextView
+    private val micButton: View
+    private var voiceLanguage = "id-ID"
+    private var listeningAnimator: ValueAnimator? = null
     private val remotePage = LinearLayout(context).apply { orientation = LinearLayout.VERTICAL }
     private val devicesPage = LinearLayout(context).apply { orientation = LinearLayout.VERTICAL }
     private val settingsPage = LinearLayout(context).apply { orientation = LinearLayout.VERTICAL }
@@ -93,6 +103,8 @@ class RemoteScreen(
         val devicesButton = primaryButton("PAIR DENGAN TV", onConnect)
         devicesConnectLabel = devicesButton.second
         scanButton = buildScanButton()
+        voiceLanguageButton = label("ID", 10, SOFT_GOLD, bold = true)
+        micButton = buildMicrophoneButton()
 
         scrollView.addView(content, FrameLayout.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT,
@@ -143,6 +155,7 @@ class RemoteScreen(
             state.paired -> "SUDAH DIPASANGKAN"
             else -> "SIAP DIHUBUNGKAN"
         }
+
         deviceStatus.setTextColor(if (state.connected) CONNECTED else GOLD)
         scanLabel.text = if (state.searching) "MENCARI" else "CARI TV"
         scanProgress.visibility = if (state.searching) View.VISIBLE else View.GONE
@@ -161,6 +174,41 @@ class RemoteScreen(
         renderDevices(state)
         remoteControls.forEach { control ->
             control.alpha = if (state.connected) 1f else 0.82f
+        }
+    }
+
+    fun setVoiceSearchResult(text: String) {
+        voiceQuery.setText(text)
+        voiceQuery.setSelection(voiceQuery.text.length)
+    }
+
+    fun setVoiceMessage(message: String) {
+        voiceHint.text = message
+    }
+
+    fun setVoiceListening(listening: Boolean) {
+        if (listening) {
+            voiceHint.text = "Mendengarkan... silakan bicara."
+            micButton.contentDescription = "Sedang mendengarkan. Ketuk untuk berhenti."
+            if (listeningAnimator?.isRunning != true) {
+                listeningAnimator = ValueAnimator.ofFloat(1f, 1.14f).apply {
+                    duration = 650
+                    repeatCount = ValueAnimator.INFINITE
+                    repeatMode = ValueAnimator.REVERSE
+                    addUpdateListener { animation ->
+                        val scale = animation.animatedValue as Float
+                        micButton.scaleX = scale
+                        micButton.scaleY = scale
+                    }
+                    start()
+                }
+            }
+        } else {
+            listeningAnimator?.cancel()
+            listeningAnimator = null
+            micButton.scaleX = 1f
+            micButton.scaleY = 1f
+            micButton.contentDescription = "Mulai pencarian suara"
         }
     }
 
@@ -203,6 +251,8 @@ class RemoteScreen(
     }
 
     private fun buildRemotePage() {
+        remotePage.addView(sectionHeading("PENCARIAN", "SUARA & TEKS"), fullWidthTopMargin(10))
+        remotePage.addView(buildVoiceSearchPanel(), fullWidthTopMargin(8))
         remotePage.addView(sectionHeading("NAVIGASI", "REMOTE CONTROL"), fullWidthTopMargin(10))
         remotePage.addView(buildDirectionalPad(), fullWidthTopMargin(12))
         remotePage.addView(sectionHeading("AKSES CEPAT", "KONTROL UTAMA"), fullWidthTopMargin(22))
@@ -217,6 +267,83 @@ class RemoteScreen(
             label("Ketuk Keyboard untuk mengirim teks ke TV.", 10, MUTED),
             fullWidthTopMargin(12),
         )
+    }
+
+    private fun buildVoiceSearchPanel(): View = LinearLayout(context).apply {
+        orientation = LinearLayout.VERTICAL
+        setPadding(dp(13), dp(12), dp(13), dp(12))
+        background = rounded(SURFACE, 17, EDGE_GOLD)
+        val languageRow = LinearLayout(context).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            addView(label("VOICE SEARCH", 9, SOFT_GOLD, bold = true, spacing = 0.1f),
+                LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+            voiceLanguageButton.background = ripple(SURFACE_RAISED, 9)
+            voiceLanguageButton.gravity = Gravity.CENTER
+            voiceLanguageButton.setPadding(dp(12), dp(7), dp(12), dp(7))
+            voiceLanguageButton.contentDescription = "Ganti bahasa pengenalan suara"
+            voiceLanguageButton.setOnClickListener {
+                voiceLanguage = if (voiceLanguage == "id-ID") "en-US" else "id-ID"
+                voiceLanguageButton.text = if (voiceLanguage == "id-ID") "ID" else "EN"
+                voiceHint.text = if (voiceLanguage == "id-ID") {
+                    "Bahasa Indonesia dipilih."
+                } else {
+                    "English voice recognition selected."
+                }
+            }
+            addView(voiceLanguageButton)
+        }
+        addView(languageRow, fullWidthParams())
+
+        voiceQuery.apply {
+            hint = "Cari film, acara, atau aplikasi"
+            setSingleLine(true)
+            textSize = 14f
+            setTextColor(TEXT)
+            setHintTextColor(MUTED)
+            setPadding(dp(12), 0, dp(12), 0)
+            background = rounded(SURFACE_RAISED, 11, EDGE)
+            imeOptions = android.view.inputmethod.EditorInfo.IME_ACTION_SEARCH
+            maxLines = 1
+        }
+        addView(voiceQuery, LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT,
+            dp(48),
+        ).apply {
+            topMargin = dp(10)
+        })
+
+        val actions = LinearLayout(context).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+        }
+        micButton.background = ripple(0xff393321.toInt(), 14)
+        actions.addView(micButton, LinearLayout.LayoutParams(dp(54), dp(48)))
+        val send = primaryButton("KIRIM KE TV") {
+            onSendSearch(voiceQuery.text.toString())
+        }.first.apply {
+            minimumHeight = dp(48)
+        }
+        actions.addView(send, LinearLayout.LayoutParams(0, dp(48), 1f).apply {
+            marginStart = dp(9)
+        })
+        addView(actions, LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT,
+            ViewGroup.LayoutParams.WRAP_CONTENT,
+        ).apply {
+            topMargin = dp(9)
+        })
+        addView(voiceHint.apply { maxLines = 2 }, fullWidthTopMargin(8))
+    }
+
+    private fun buildMicrophoneButton(): View = FrameLayout(context).apply {
+        isClickable = true
+        isFocusable = true
+        contentDescription = "Mulai pencarian suara"
+        setOnClickListener { onVoiceSearch(voiceLanguage) }
+        setOnTouchListener { view, event -> pressFeedback(view, event) }
+        addView(IconView(Icon.MICROPHONE, SOFT_GOLD),
+            FrameLayout.LayoutParams(dp(23), dp(23), Gravity.CENTER))
     }
 
     private fun buildDeviceCard(connectButton: View): View = LinearLayout(context).apply {
@@ -798,7 +925,7 @@ class RemoteScreen(
     private enum class Icon {
         SETTINGS, TV, SCAN, POWER, UP, DOWN, LEFT, RIGHT, HOME, BACK, MENU,
         VOLUME_UP, VOLUME_DOWN, MUTE, KEYBOARD, CHANNEL_UP, CHANNEL_DOWN,
-        REMOTE, DEVICES, WIFI, PAIR, INFO, CHEVRON, REWIND, PLAY_PAUSE,
+        REMOTE, DEVICES, WIFI, PAIR, INFO, CHEVRON, REWIND, PLAY_PAUSE, MICROPHONE, SEARCH,
         FAST_FORWARD, GUIDE, INPUT,
     }
 
@@ -972,6 +1099,16 @@ class RemoteScreen(
                     canvas.drawLine(12f, 15f, 12f, 7f, paint)
                     canvas.drawLine(8f, 11f, 12f, 7f, paint)
                     canvas.drawLine(16f, 11f, 12f, 7f, paint)
+                }
+                Icon.MICROPHONE -> {
+                    canvas.drawRoundRect(RectF(8f, 2f, 16f, 14f), 4f, 4f, paint)
+                    canvas.drawArc(RectF(5f, 7f, 19f, 19f), 0f, 180f, false, paint)
+                    canvas.drawLine(12f, 19f, 12f, 22f, paint)
+                    canvas.drawLine(8f, 22f, 16f, 22f, paint)
+                }
+                Icon.SEARCH -> {
+                    canvas.drawCircle(10f, 10f, 6f, paint)
+                    canvas.drawLine(14.5f, 14.5f, 21f, 21f, paint)
                 }
             }
             canvas.restore()

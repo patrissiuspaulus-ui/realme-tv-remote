@@ -1,11 +1,17 @@
 package com.realme.tvremote
 
+import android.Manifest
 import android.app.Activity
 import android.app.AlertDialog
+import android.content.Intent
+import android.content.pm.PackageManager
 import android.net.wifi.WifiManager
 import android.os.Handler
 import android.os.Looper
 import android.os.Bundle
+import android.speech.RecognitionListener
+import android.speech.RecognizerIntent
+import android.speech.SpeechRecognizer
 import android.text.InputFilter
 import android.text.InputType
 import android.view.Gravity
@@ -37,6 +43,9 @@ class MainActivity : Activity() {
     private var statusIsError = false
     private var multicastLock: WifiManager.MulticastLock? = null
     private var discoveryTimeout: Runnable? = null
+    private var speechRecognizer: SpeechRecognizer? = null
+    private var voiceListening = false
+    private var pendingVoiceLanguage = "id-ID"
     private lateinit var screen: RemoteScreen
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -58,6 +67,8 @@ class MainActivity : Activity() {
             onRemoteKey = { key -> sendKey(key) },
             onKeyboard = { showKeyboardDialog() },
             onSettings = { showSettingsDialog() },
+            onVoiceSearch = { language -> startVoiceSearch(language) },
+            onSendSearch = { query -> sendVoiceSearch(query) },
         )
         setContentView(screen.root)
         discovery = TvDiscovery(this) { found ->
@@ -78,10 +89,176 @@ class MainActivity : Activity() {
         discoveryTimeout?.let(mainHandler::removeCallbacks)
         discovery?.stop()
         pairing?.close()
+        speechRecognizer?.cancel()
+        speechRecognizer?.destroy()
+        speechRecognizer = null
         remote?.disconnect()
         multicastLock?.let { if (it.isHeld) it.release() }
         worker.shutdownNow()
         super.onDestroy()
+    }
+
+    override fun onRequestPermissionsResult(
+        requestCode: Int,
+        permissions: Array<out String>,
+        grantResults: IntArray,
+    ) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        if (requestCode != REQUEST_RECORD_AUDIO) return
+        if (grantResults.firstOrNull() == PackageManager.PERMISSION_GRANTED) {
+            startVoiceRecognition(pendingVoiceLanguage)
+        } else {
+            voiceListening = false
+            screen.setVoiceListening(false)
+            screen.setVoiceMessage("Izin mikrofon ditolak. Izinkan mikrofon untuk memakai pencarian suara.")
+            setStatus("Izin mikrofon ditolak. Aktifkan izin di Pengaturan aplikasi.", error = true)
+        }
+    }
+
+    private fun startVoiceSearch(language: String) {
+        if (voiceListening) {
+            speechRecognizer?.stopListening()
+            return
+        }
+        pendingVoiceLanguage = language
+        if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
+            screen.setVoiceMessage("Izinkan akses mikrofon untuk mulai mencari dengan suara.")
+            requestPermissions(arrayOf(Manifest.permission.RECORD_AUDIO), REQUEST_RECORD_AUDIO)
+            return
+        }
+        startVoiceRecognition(language)
+    }
+
+    private fun startVoiceRecognition(language: String) {
+        if (!SpeechRecognizer.isRecognitionAvailable(this)) {
+            screen.setVoiceMessage("Layanan pengenalan suara tidak tersedia di perangkat ini.")
+            setStatus("Speech Recognizer tidak tersedia.", error = true)
+            return
+        }
+        val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
+            putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
+            putExtra(RecognizerIntent.EXTRA_LANGUAGE, language)
+            putExtra(RecognizerIntent.EXTRA_LANGUAGE_PREFERENCE, language)
+            putExtra(RecognizerIntent.EXTRA_ONLY_RETURN_LANGUAGE_PREFERENCE, false)
+            putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
+            putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 1)
+            putExtra(
+                RecognizerIntent.EXTRA_PROMPT,
+                if (language == "id-ID") "Ucapkan yang ingin dicari di TV" else "Say what you want to search on TV",
+            )
+        }
+        screen.setVoiceSearchResult("")
+        screen.setVoiceMessage(if (language == "id-ID") "Menyiapkan mikrofon..." else "Preparing microphone...")
+        try {
+            val recognizer = speechRecognizer ?: SpeechRecognizer.createSpeechRecognizer(this).also {
+                speechRecognizer = it
+                it.setRecognitionListener(createRecognitionListener())
+            }
+            recognizer.startListening(intent)
+        } catch (error: Exception) {
+            voiceListening = false
+            screen.setVoiceListening(false)
+            screen.setVoiceMessage("Mikrofon tidak dapat dimulai. Coba lagi.")
+            setStatus(error.message ?: "Pengenalan suara gagal dimulai.", error = true)
+        }
+    }
+
+    private fun createRecognitionListener() = object : RecognitionListener {
+        override fun onReadyForSpeech(params: Bundle?) {
+            voiceListening = true
+            screen.setVoiceListening(true)
+            setStatus(if (pendingVoiceLanguage == "id-ID") "Mendengarkan pencarian..." else "Listening for your search...")
+        }
+
+        override fun onBeginningOfSpeech() = Unit
+
+        override fun onRmsChanged(rmsdB: Float) = Unit
+
+        override fun onBufferReceived(buffer: ByteArray?) = Unit
+
+        override fun onEndOfSpeech() {
+            voiceListening = false
+            screen.setVoiceListening(false)
+            screen.setVoiceMessage("Memproses suara...")
+        }
+
+        override fun onError(error: Int) {
+            voiceListening = false
+            screen.setVoiceListening(false)
+            val message = when (error) {
+                SpeechRecognizer.ERROR_NO_MATCH, SpeechRecognizer.ERROR_SPEECH_TIMEOUT ->
+                    "Suara tidak terdeteksi. Dekatkan ponsel dan coba bicara lagi."
+                SpeechRecognizer.ERROR_AUDIO ->
+                    "Mikrofon tidak menangkap suara. Periksa mikrofon lalu coba lagi."
+                SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS ->
+                    "Izin mikrofon ditolak. Izinkan mikrofon di Pengaturan aplikasi."
+                SpeechRecognizer.ERROR_NETWORK, SpeechRecognizer.ERROR_NETWORK_TIMEOUT ->
+                    "Layanan suara bermasalah. Periksa koneksi internet lalu coba lagi."
+                SpeechRecognizer.ERROR_LANGUAGE_NOT_SUPPORTED, SpeechRecognizer.ERROR_LANGUAGE_UNAVAILABLE ->
+                    "Bahasa ini tidak tersedia pada layanan suara perangkat."
+                SpeechRecognizer.ERROR_RECOGNIZER_BUSY ->
+                    "Pengenalan suara sedang sibuk. Coba beberapa saat lagi."
+                else -> "Pengenalan suara gagal (kode $error). Ketuk mikrofon untuk mencoba lagi."
+            }
+            screen.setVoiceMessage(message)
+            setStatus(message, error = true)
+        }
+
+        override fun onResults(results: Bundle?) {
+            voiceListening = false
+            screen.setVoiceListening(false)
+            val transcript = results
+                ?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
+                ?.firstOrNull()
+                ?.trim()
+                .orEmpty()
+            if (transcript.isEmpty()) {
+                val message = "Suara tidak terdeteksi. Coba bicara lebih jelas."
+                screen.setVoiceMessage(message)
+                setStatus(message, error = true)
+            } else {
+                screen.setVoiceSearchResult(transcript)
+                screen.setVoiceMessage("Hasil siap. Periksa teks, lalu ketuk KIRIM KE TV.")
+                setStatus("Pencarian suara siap dikirim.")
+            }
+        }
+
+        override fun onPartialResults(partialResults: Bundle?) {
+            val partial = partialResults
+                ?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
+                ?.firstOrNull()
+                ?.trim()
+                .orEmpty()
+            if (partial.isNotEmpty()) screen.setVoiceSearchResult(partial)
+        }
+
+        override fun onEvent(eventType: Int, params: Bundle?) = Unit
+    }
+
+    private fun sendVoiceSearch(query: String) {
+        val text = query.trim()
+        if (text.isEmpty()) {
+            screen.setVoiceMessage("Ucapkan atau ketik kata yang ingin dicari terlebih dahulu.")
+            setStatus("Kata pencarian masih kosong.", error = true)
+            return
+        }
+        val client = remote
+        if (client == null || !client.isConnected()) {
+            screen.setVoiceMessage("Hubungkan TV sebelum mengirim pencarian.")
+            setStatus("Hubungkan TV sebelum mengirim pencarian.", error = true)
+            return
+        }
+        runCatching {
+            client.sendText(text)
+            client.sendKey(TvKey.SEARCH)
+        }.onSuccess {
+            screen.setVoiceMessage("Perintah dikirim. Buka kolom pencarian di TV jika belum aktif.")
+            setStatus("Pencarian dikirim ke TV.")
+        }.onFailure { error ->
+            val message = error.message ?: "Pencarian tidak dapat dikirim ke TV."
+            screen.setVoiceMessage(message)
+            setStatus(message, error = true)
+        }
     }
 
     private fun render() {
@@ -347,6 +524,7 @@ class MainActivity : Activity() {
 
     private fun isConnected(): Boolean = remote?.isConnected() == true
     companion object {
+        private const val REQUEST_RECORD_AUDIO = 410
         private const val COLOR_BACKGROUND = 0xff090a0d.toInt()
         private const val COLOR_TEXT = 0xfff4f1e9.toInt()
         private const val COLOR_MUTED = 0xff9699a1.toInt()

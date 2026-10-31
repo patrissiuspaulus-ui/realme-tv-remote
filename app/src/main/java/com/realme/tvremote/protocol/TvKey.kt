@@ -22,4 +22,5 @@ enum class TvKey(val androidCode: Int) {
     GUIDE(172),
     SETTINGS(176),
     TV_INPUT(178),
+    SEARCH(84),
 }
