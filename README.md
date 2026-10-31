@@ -1,6 +1,6 @@
 # Realme TV Remote
 
-Aplikasi remote Android native untuk TV yang menjalankan Android TV Remote Service v2, termasuk Realme Android TV dan Google TV yang menyediakan service tersebut.
+Aplikasi remote Android native untuk TV yang menjalankan Android TV Remote Service v2, termasuk Realme Android TV dan Google TV yang menyediakan service tersebut. Versi saat ini 1.1.0 (versionCode 2).
 
 ## Fitur
 
@@ -21,7 +21,7 @@ Prasyarat: JDK 17 dan Android SDK Platform 35 serta Build Tools 35.0.0.
 ./gradlew testDebugUnitTest assembleDebug
 ```
 
-APK Debug dibuat di `app/build/outputs/apk/debug/app-debug.apk`. GitHub Actions menjalankan tes dan mengunggah APK Debug sebagai artifact pada push, pull request, atau workflow dispatch.
+APK Debug dibuat di `app/build/outputs/apk/debug/app-debug.apk`. GitHub Actions menjalankan tes dan mengunggah APK sebagai artifact `Realme-TV-Remote` pada push, pull request, atau workflow dispatch.
 
 ## Batas pengujian
 

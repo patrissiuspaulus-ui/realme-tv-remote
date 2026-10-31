@@ -102,6 +102,11 @@ class ClientIdentity private constructor(
         fun tvPin(context: Context, host: String): String? =
             context.getSharedPreferences(PIN_PREFS, Context.MODE_PRIVATE).getString(pinKey(host), null)
 
+        fun forgetTv(context: Context, host: String) {
+            context.getSharedPreferences(PIN_PREFS, Context.MODE_PRIVATE)
+                .edit().remove(pinKey(host)).apply()
+        }
+
         private fun pinKey(host: String) = "tv_${Base64.encodeToString(host.toByteArray(), Base64.NO_WRAP)}"
 
         private fun fingerprint(certificate: X509Certificate): String =
