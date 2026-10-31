@@ -15,4 +15,11 @@ enum class TvKey(val androidCode: Int) {
     BACK(4),
     MENU(82),
     MUTE(164),
+    MEDIA_PLAY_PAUSE(85),
+    MEDIA_REWIND(89),
+    MEDIA_FAST_FORWARD(90),
+    INFO(165),
+    GUIDE(172),
+    SETTINGS(176),
+    TV_INPUT(178),
 }

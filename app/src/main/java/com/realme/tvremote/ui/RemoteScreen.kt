@@ -97,22 +97,29 @@ class RemoteScreen(
         devicesConnectLabel = devicesButton.second
         scanButton = buildScanButton()
 
-        scrollView.addView(content)
+        scrollView.addView(content, FrameLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT,
+            ViewGroup.LayoutParams.WRAP_CONTENT,
+        ))
         root.addView(
             scrollView,
             LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f),
         )
-        content.addView(header)
-        content.addView(buildStatusBar(), topMargin(16))
+        content.addView(header, fullWidthParams())
+        content.addView(buildStatusBar(), fullWidthTopMargin(16))
         devicesPage.visibility = View.GONE
         settingsPage.visibility = View.GONE
-        pageHost.addView(remotePage)
-        pageHost.addView(devicesPage)
-        pageHost.addView(settingsPage)
+        val pageParams = FrameLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT,
+            ViewGroup.LayoutParams.WRAP_CONTENT,
+        )
+        pageHost.addView(remotePage, pageParams)
+        pageHost.addView(devicesPage, FrameLayout.LayoutParams(pageParams))
+        pageHost.addView(settingsPage, FrameLayout.LayoutParams(pageParams))
         buildRemotePage(homeButton.first)
         buildDevicesPage(devicesButton.first)
         buildSettingsPage()
-        content.addView(pageHost, topMargin(10))
+        content.addView(pageHost, fullWidthTopMargin(10))
         root.addView(buildBottomNavigation(), LinearLayout.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT,
             dp(72),
@@ -210,17 +217,21 @@ class RemoteScreen(
             label("Nikmati pengalaman menonton yang lebih nyaman.", 12, MUTED),
             topMargin(5),
         )
-        remotePage.addView(sectionHeading("PERANGKAT AKTIF", "JARINGAN LOKAL"), topMargin(22))
-        remotePage.addView(buildDeviceCard(connectButton))
-        remotePage.addView(sectionHeading("REMOTE CONTROL", "NAVIGASI PRESISI"), topMargin(22))
-        remotePage.addView(buildDirectionalPad(), topMargin(3))
-        remotePage.addView(sectionHeading("AKSES CEPAT", "KONTROL UTAMA"), topMargin(22))
-        remotePage.addView(buildQuickControls(), topMargin(3))
-        remotePage.addView(sectionHeading("LAINNYA", "KONTROL TV"), topMargin(22))
-        remotePage.addView(buildSecondaryControls(), topMargin(3))
+        remotePage.addView(sectionHeading("PERANGKAT AKTIF", "JARINGAN LOKAL"), fullWidthTopMargin(22))
+        remotePage.addView(buildDeviceCard(connectButton), fullWidthParams())
+        remotePage.addView(sectionHeading("REMOTE CONTROL", "NAVIGASI PRESISI"), fullWidthTopMargin(22))
+        remotePage.addView(buildDirectionalPad(), fullWidthTopMargin(12))
+        remotePage.addView(sectionHeading("AKSES CEPAT", "KONTROL UTAMA"), fullWidthTopMargin(22))
+        remotePage.addView(buildQuickControls(), fullWidthTopMargin(3))
+        remotePage.addView(sectionHeading("MEDIA", "PEMUTARAN"), fullWidthTopMargin(22))
+        remotePage.addView(buildMediaControls(), fullWidthTopMargin(3))
+        remotePage.addView(sectionHeading("KONTROL TV", "INFO & SUMBER"), fullWidthTopMargin(22))
+        remotePage.addView(buildTvControls(), fullWidthTopMargin(3))
+        remotePage.addView(sectionHeading("LAINNYA", "KONTROL TV"), fullWidthTopMargin(22))
+        remotePage.addView(buildSecondaryControls(), fullWidthTopMargin(3))
         remotePage.addView(
             label("Ketuk Keyboard untuk mengirim teks ke TV.", 10, MUTED),
-            topMargin(12),
+            fullWidthTopMargin(12),
         )
     }
 
@@ -247,14 +258,14 @@ class RemoteScreen(
         labels.addView(deviceStatus, topMargin(7))
         row.addView(labels, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
         row.addView(scanButton)
-        addView(row)
+        addView(row, fullWidthParams())
         addView(View(context).apply { setBackgroundColor(EDGE) }, LinearLayout.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT, dp(1),
         ).apply {
             topMargin = dp(14)
             bottomMargin = dp(13)
         })
-        addView(connectButton)
+        addView(connectButton, fullWidthParams())
     }
 
     private fun buildTvArtwork(): View = FrameLayout(context).apply {
@@ -334,6 +345,7 @@ class RemoteScreen(
         ))
         return FrameLayout(context).apply {
             addView(pad, FrameLayout.LayoutParams(dp(diameter), dp(diameter), Gravity.CENTER))
+            layoutParams = fullWidthParams(dp(diameter))
         }
     }
 
@@ -397,8 +409,45 @@ class RemoteScreen(
             })
             remoteControls.add(tile)
         }
+        grid.layoutParams = fullWidthParams()
         return grid
     }
+
+    private fun buildMediaControls(): View = controlGrid(
+        listOf(
+            Triple(Icon.REWIND, "REWIND", TvKey.MEDIA_REWIND),
+            Triple(Icon.PLAY_PAUSE, "PLAY / PAUSE", TvKey.MEDIA_PLAY_PAUSE),
+            Triple(Icon.FAST_FORWARD, "FAST FORWARD", TvKey.MEDIA_FAST_FORWARD),
+        ),
+    )
+
+    private fun buildTvControls(): View = controlGrid(
+        listOf(
+            Triple(Icon.GUIDE, "GUIDE", TvKey.GUIDE),
+            Triple(Icon.INFO, "INFO", TvKey.INFO),
+            Triple(Icon.INPUT, "INPUT", TvKey.TV_INPUT),
+        ),
+    )
+
+    private fun controlGrid(controls: List<Triple<Icon, String, TvKey>>): View =
+        GridLayout(context).apply {
+            columnCount = controls.size
+            rowCount = 1
+            useDefaultMargins = false
+            controls.forEachIndexed { index, (icon, title, key) ->
+                val tile = controlTile(icon, title, { onRemoteKey(key) })
+                addView(tile, GridLayout.LayoutParams(
+                    GridLayout.spec(0, 1, 1f),
+                    GridLayout.spec(index, 1, 1f),
+                ).apply {
+                    width = 0
+                    height = dp(78)
+                    setMargins(dp(3), dp(3), dp(3), dp(3))
+                })
+                remoteControls.add(tile)
+            }
+            layoutParams = fullWidthParams()
+        }
 
     private fun buildSecondaryControls(): View {
         val row = LinearLayout(context).apply {
@@ -418,6 +467,7 @@ class RemoteScreen(
             })
             remoteControls.add(tile)
         }
+        row.layoutParams = fullWidthParams()
         return row
     }
 
@@ -464,19 +514,19 @@ class RemoteScreen(
             setOnClickListener { onScan() }
             setOnTouchListener { view, event -> pressFeedback(view, event) }
         }
-        devicesPage.addView(scanAction, topMargin(20))
-        devicesPage.addView(sectionHeading("TERDETEKSI", "PILIH PERANGKAT"), topMargin(21))
+        devicesPage.addView(scanAction, fullWidthTopMargin(20))
+        devicesPage.addView(sectionHeading("TERDETEKSI", "PILIH PERANGKAT"), fullWidthTopMargin(21))
         val listCard = LinearLayout(context).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(10), dp(10), dp(10), dp(10))
             background = rounded(SURFACE, 18, EDGE)
-            addView(deviceList)
+            addView(deviceList, fullWidthParams())
         }
-        devicesPage.addView(listCard)
-        devicesPage.addView(connectButton, topMargin(14))
+        devicesPage.addView(listCard, fullWidthParams())
+        devicesPage.addView(connectButton, fullWidthTopMargin(14))
         devicesPage.addView(
             label("Pastikan ponsel dan TV berada di jaringan lokal yang sama.", 10, MUTED),
-            topMargin(10),
+            fullWidthTopMargin(10),
         )
     }
 
@@ -487,23 +537,23 @@ class RemoteScreen(
             label("Kelola pairing dan informasi aplikasi.", 12, MUTED),
             topMargin(5),
         )
-        settingsPage.addView(sectionHeading("AKUN PERANGKAT", "PRIVASI"), topMargin(22))
+        settingsPage.addView(sectionHeading("AKUN PERANGKAT", "PRIVASI"), fullWidthTopMargin(22))
         settingsPage.addView(
             settingsRow(Icon.TV, "Pairing TV", "Lupakan perangkat tersimpan atau lihat detail.") {
                 onSettings()
             },
-            topMargin(3),
+            fullWidthTopMargin(3),
         )
-        settingsPage.addView(sectionHeading("TENTANG", "REALME TV REMOTE"), topMargin(22))
+        settingsPage.addView(sectionHeading("TENTANG", "REALME TV REMOTE"), fullWidthTopMargin(22))
         settingsPage.addView(
             settingsRow(Icon.INFO, "Tentang aplikasi", "Android TV Remote Protocol versi 2.") {
                 onSettings()
             },
-            topMargin(3),
+            fullWidthTopMargin(3),
         )
         settingsPage.addView(
             label("Koneksi dan kredensial pairing disimpan secara lokal di perangkat ini.", 10, MUTED),
-            topMargin(14),
+            fullWidthTopMargin(14),
         )
     }
 
@@ -655,6 +705,7 @@ class RemoteScreen(
         addView(label(title, 9, SOFT_GOLD, bold = true, spacing = 0.12f),
             LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
         addView(label(detail, 8, MUTED, bold = true, spacing = 0.05f))
+        layoutParams = fullWidthParams()
     }
 
     private fun primaryButton(title: String, onClick: () -> Unit): Pair<View, TextView> {
@@ -733,6 +784,13 @@ class RemoteScreen(
     private fun params(width: Int, height: Int) =
         LinearLayout.LayoutParams(dp(width), dp(height))
 
+    private fun fullWidthParams(height: Int = ViewGroup.LayoutParams.WRAP_CONTENT) =
+        LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, height)
+
+    private fun fullWidthTopMargin(margin: Int) = fullWidthParams().apply {
+        topMargin = dp(margin)
+    }
+
     private fun paramsMatchWrap() = LinearLayout.LayoutParams(
         ViewGroup.LayoutParams.MATCH_PARENT,
         ViewGroup.LayoutParams.WRAP_CONTENT,
@@ -769,7 +827,8 @@ class RemoteScreen(
     private enum class Icon {
         SETTINGS, TV, SCAN, POWER, UP, DOWN, LEFT, RIGHT, HOME, BACK, MENU,
         VOLUME_UP, VOLUME_DOWN, MUTE, KEYBOARD, CHANNEL_UP, CHANNEL_DOWN,
-        REMOTE, DEVICES, WIFI, PAIR, INFO, CHEVRON,
+        REMOTE, DEVICES, WIFI, PAIR, INFO, CHEVRON, REWIND, PLAY_PAUSE,
+        FAST_FORWARD, GUIDE, INPUT,
     }
 
     private inner class DpadSurface : View(context) {
@@ -858,6 +917,19 @@ class RemoteScreen(
                     canvas.drawPath(path, paint)
                 }
                 Icon.MENU -> for (y in listOf(6f, 12f, 18f)) canvas.drawLine(5f, y, 19f, y, paint)
+                Icon.REWIND -> {
+                    triangle(canvas, 13f, 5f, 5f, 12f, 13f, 19f)
+                    triangle(canvas, 21f, 5f, 13f, 12f, 21f, 19f)
+                }
+                Icon.FAST_FORWARD -> {
+                    triangle(canvas, 3f, 5f, 11f, 12f, 3f, 19f)
+                    triangle(canvas, 11f, 5f, 19f, 12f, 11f, 19f)
+                }
+                Icon.PLAY_PAUSE -> {
+                    canvas.drawLine(5f, 5f, 5f, 19f, paint)
+                    canvas.drawLine(10f, 5f, 10f, 19f, paint)
+                    triangle(canvas, 13f, 5f, 21f, 12f, 13f, 19f)
+                }
                 Icon.VOLUME_UP, Icon.VOLUME_DOWN, Icon.MUTE -> drawSpeaker(canvas, icon)
                 Icon.KEYBOARD -> {
                     canvas.drawRoundRect(RectF(3f, 5f, 21f, 19f), 2f, 2f, paint)
@@ -918,6 +990,18 @@ class RemoteScreen(
                     canvas.drawLine(12f, 11f, 12f, 17f, paint)
                 }
                 Icon.CHEVRON -> arrow(canvas, 8f, 5f, 16f, 12f)
+                Icon.GUIDE -> {
+                    canvas.drawRoundRect(RectF(3f, 4f, 21f, 20f), 2f, 2f, paint)
+                    canvas.drawLine(3f, 9f, 21f, 9f, paint)
+                    canvas.drawLine(9f, 9f, 9f, 20f, paint)
+                    canvas.drawLine(15f, 9f, 15f, 20f, paint)
+                }
+                Icon.INPUT -> {
+                    canvas.drawRoundRect(RectF(3f, 5f, 21f, 19f), 2f, 2f, paint)
+                    canvas.drawLine(12f, 15f, 12f, 7f, paint)
+                    canvas.drawLine(8f, 11f, 12f, 7f, paint)
+                    canvas.drawLine(16f, 11f, 12f, 7f, paint)
+                }
             }
             canvas.restore()
         }
@@ -927,6 +1011,7 @@ class RemoteScreen(
                 moveTo(3f, 9f); lineTo(7f, 9f); lineTo(12f, 5f); lineTo(12f, 19f)
                 lineTo(7f, 15f); lineTo(3f, 15f); close()
             }
+
             canvas.drawPath(speaker, paint)
             when (icon) {
                 Icon.MUTE -> {
@@ -939,6 +1024,24 @@ class RemoteScreen(
                 }
                 else -> canvas.drawArc(RectF(11f, 6f, 20f, 18f), -55f, 110f, false, paint)
             }
+        }
+
+        private fun triangle(
+            canvas: Canvas,
+            x1: Float,
+            y1: Float,
+            x2: Float,
+            y2: Float,
+            x3: Float,
+            y3: Float,
+        ) {
+            val path = Path().apply {
+                moveTo(x1, y1)
+                lineTo(x2, y2)
+                lineTo(x3, y3)
+                close()
+            }
+            canvas.drawPath(path, fill)
         }
 
         private fun arrow(canvas: Canvas, x1: Float, y1: Float, x2: Float, y2: Float) {
