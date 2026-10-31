@@ -1,6 +1,6 @@
 # Realme TV Remote
 
-Aplikasi remote Android native untuk TV yang menjalankan Android TV Remote Service v2, termasuk Realme Android TV dan Google TV yang menyediakan service tersebut. Versi saat ini 2.0.1 (versionCode 4).
+Aplikasi remote Android native untuk TV yang menjalankan Android TV Remote Service v2, termasuk Realme Android TV dan Google TV yang menyediakan service tersebut. Versi saat ini 2.1.0 (versionCode 5).
 
 ## Fitur
 
@@ -10,6 +10,7 @@ Aplikasi remote Android native untuk TV yang menjalankan Android TV Remote Servi
 - Kontrol power, volume, channel, D-pad, OK, Home, Back, Menu, dan Mute.
 - Input teks melalui remote IME protocol.
 - Status koneksi hanya aktif setelah handshake remote selesai; koneksi yang putus ditampilkan sebagai terputus.
+- Antarmuka premium dengan directional pad melingkar, kontrol cepat, halaman perangkat, dan navigasi Remote/Devices/Settings.
 
 TV dan ponsel harus berada pada jaringan lokal yang sama, dan TV harus menjalankan Android TV Remote Service. Perintah power melalui jaringan bergantung pada service remote TV yang masih tersedia; TV yang benar-benar mati mungkin tidak dapat menerima perintah.
 

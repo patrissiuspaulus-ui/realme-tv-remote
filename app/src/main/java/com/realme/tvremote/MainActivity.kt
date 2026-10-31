@@ -347,9 +347,9 @@ class MainActivity : Activity() {
 
     private fun isConnected(): Boolean = remote?.isConnected() == true
     companion object {
-        private const val COLOR_BACKGROUND = 0xff090a0b.toInt()
-        private const val COLOR_TEXT = 0xfff3f0e8.toInt()
-        private const val COLOR_MUTED = 0xff909397.toInt()
+        private const val COLOR_BACKGROUND = 0xff090a0d.toInt()
+        private const val COLOR_TEXT = 0xfff4f1e9.toInt()
+        private const val COLOR_MUTED = 0xff9699a1.toInt()
         private const val DISCOVERY_DURATION_MS = 12_000L
     }
 }

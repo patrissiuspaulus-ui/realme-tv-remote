@@ -6,15 +6,17 @@ import android.graphics.Canvas
 import android.graphics.Paint
 import android.graphics.Path
 import android.graphics.RectF
+import android.graphics.Shader
+import android.graphics.RadialGradient
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
 import android.graphics.drawable.RippleDrawable
 import android.view.Gravity
+import android.view.MotionEvent
 import android.view.View
 import android.view.ViewGroup
 import android.widget.FrameLayout
 import android.widget.GridLayout
-import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.ProgressBar
 import android.widget.ScrollView
@@ -42,45 +44,86 @@ class RemoteScreen(
     private val onKeyboard: () -> Unit,
     private val onSettings: () -> Unit,
 ) {
-    val root: ScrollView = ScrollView(context).apply {
+    val root = LinearLayout(context).apply {
+        orientation = LinearLayout.VERTICAL
         setBackgroundColor(BACKGROUND)
-        isFillViewport = true
-        clipToPadding = false
     }
 
+    private val scrollView = ScrollView(context).apply {
+        isFillViewport = true
+        clipToPadding = false
+        overScrollMode = View.OVER_SCROLL_NEVER
+        setBackgroundColor(BACKGROUND)
+    }
     private val content = LinearLayout(context).apply {
         orientation = LinearLayout.VERTICAL
-        setPadding(dp(context, 20), dp(context, 18), dp(context, 20), dp(context, 28))
+        setPadding(dp(20), dp(18), dp(20), dp(24))
     }
-    private val statusDot = View(context).apply { background = circle(context, MUTED) }
-    private val statusLabel = label(context, "Belum terhubung", 13, TEXT, bold = true)
-    private val deviceName = label(context, "Belum ada TV", 17, TEXT, bold = true)
-    private val deviceAddress = label(context, "Pindai jaringan Wi-Fi untuk menemukan TV", 12, MUTED)
+    private val statusDot = View(context).apply { background = circle(MUTED_DOT) }
+    private val statusLabel = label("Belum terhubung", 12, TEXT, bold = true).apply {
+        maxLines = 2
+    }
+    private val deviceName = label("Belum ada TV", 17, TEXT, bold = true).apply {
+        maxLines = 2
+    }
+    private val deviceAddress = label("Pindai jaringan Wi-Fi untuk menemukan TV", 11, MUTED).apply {
+        maxLines = 2
+    }
+    private val deviceStatus = label("SIAP DIHUBUNGKAN", 9, GOLD, bold = true, spacing = 0.08f)
     private val deviceList = LinearLayout(context).apply { orientation = LinearLayout.VERTICAL }
-    private val scanLabel = label(context, "CARI TV", 10, GOLD, bold = true)
+    private val scanLabel = label("CARI TV", 9, GOLD, bold = true, spacing = 0.06f)
     private val scanProgress = ProgressBar(context).apply {
         isIndeterminate = true
         visibility = View.GONE
         indeterminateTintList = ColorStateList.valueOf(GOLD)
     }
-    private val connectionButton = actionButton(context, "PAIR DENGAN TV", primary = true, onClick = onConnect)
+    private val scanButton: View
+    private val homeConnectLabel: TextView
+    private val devicesConnectLabel: TextView
+    private val remotePage = LinearLayout(context).apply { orientation = LinearLayout.VERTICAL }
+    private val devicesPage = LinearLayout(context).apply { orientation = LinearLayout.VERTICAL }
+    private val settingsPage = LinearLayout(context).apply { orientation = LinearLayout.VERTICAL }
+    private val pageHost = FrameLayout(context)
+    private val pages = listOf(remotePage, devicesPage, settingsPage)
+    private val navItems = mutableListOf<NavItem>()
     private val remoteControls = mutableListOf<View>()
+    private var currentPage = Page.REMOTE
 
     init {
-        connectionButton.minimumHeight = dp(context, 52)
-        root.addView(content)
-        buildHeader(context)
-        buildConnectionSection(context)
-        buildRemoteSection(context)
-        buildQuickControls(context)
-        buildKeyboard(context)
+        val header = buildHeader()
+        val homeButton = primaryButton("PAIR DENGAN TV", onConnect)
+        homeConnectLabel = homeButton.second
+        val devicesButton = primaryButton("PAIR DENGAN TV", onConnect)
+        devicesConnectLabel = devicesButton.second
+        scanButton = buildScanButton()
+
+        scrollView.addView(content)
+        root.addView(
+            scrollView,
+            LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f),
+        )
+        content.addView(header)
+        content.addView(buildStatusBar(), topMargin(16))
+        devicesPage.visibility = View.GONE
+        settingsPage.visibility = View.GONE
+        pageHost.addView(remotePage)
+        pageHost.addView(devicesPage)
+        pageHost.addView(settingsPage)
+        buildRemotePage(homeButton.first)
+        buildDevicesPage(devicesButton.first)
+        buildSettingsPage()
+        content.addView(pageHost, topMargin(10))
+        root.addView(buildBottomNavigation(), LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT,
+            dp(72),
+        ))
+        updateNavigation()
     }
 
     fun render(state: RemoteScreenState) {
         statusLabel.text = state.status
         statusLabel.setTextColor(if (state.isError) ERROR else TEXT)
         statusDot.background = circle(
-            statusDot.context,
             when {
                 state.connected -> CONNECTED
                 state.busy || state.searching -> GOLD
@@ -88,235 +131,490 @@ class RemoteScreen(
             },
         )
         deviceName.text = state.selectedDevice?.name ?: "Belum ada TV"
-        deviceAddress.text = state.selectedDevice?.host ?: "Pindai jaringan Wi-Fi untuk menemukan TV"
+        deviceAddress.text = state.selectedDevice?.host
+            ?: "Pindai jaringan Wi-Fi untuk menemukan TV"
+        deviceStatus.text = when {
+            state.connected -> "TERHUBUNG"
+            state.busy -> "MENGHUBUNGKAN"
+            state.paired -> "SUDAH DIPASANGKAN"
+            else -> "SIAP DIHUBUNGKAN"
+        }
+        deviceStatus.setTextColor(if (state.connected) CONNECTED else GOLD)
         scanLabel.text = if (state.searching) "MENCARI" else "CARI TV"
         scanProgress.visibility = if (state.searching) View.VISIBLE else View.GONE
-        (connectionButton.getChildAt(connectionButton.childCount - 1) as TextView).text = when {
-            state.busy -> "SEDANG MENGHUBUNGKAN..."
+        scanButton.isEnabled = !state.searching
+
+        val connectionText = when {
+            state.busy -> "MENGHUBUNGKAN..."
             state.connected -> "PUTUSKAN KONEKSI"
-            state.paired -> "HUBUNGKAN"
+            state.paired -> "HUBUNGKAN KE TV"
             else -> "PAIR DENGAN TV"
         }
-        connectionButton.isEnabled = !state.busy && state.selectedDevice != null
+        homeConnectLabel.text = connectionText
+        devicesConnectLabel.text = connectionText
+        val canConnect = !state.busy && state.selectedDevice != null
+        homeConnectLabel.parentAsView().isEnabled = canConnect
+        devicesConnectLabel.parentAsView().isEnabled = canConnect
+
         renderDevices(state)
         remoteControls.forEach { control ->
-            control.alpha = if (state.connected) 1f else 0.78f
+            control.alpha = if (state.connected) 1f else 0.82f
         }
     }
 
-    private fun buildHeader(context: Context) {
+    private fun buildHeader(): View {
         val header = LinearLayout(context).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
         }
-        val mark = TextView(context).apply {
-            text = "R"
-            textSize = 21f
-            typeface = Typeface.create("sans-serif", Typeface.BOLD)
-            gravity = Gravity.CENTER
-            setTextColor(BACKGROUND)
-            background = rounded(context, GOLD, 15, GOLD)
+        val mark = FrameLayout(context).apply {
+            background = rounded(GOLD, 16, GOLD)
+            addView(label("R", 22, BACKGROUND, bold = true), FrameLayout.LayoutParams(
+                dp(48), dp(48), Gravity.CENTER,
+            ))
         }
-        header.addView(mark, params(context, 44, 44))
+        header.addView(mark, params(48, 48))
         val title = LinearLayout(context).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(dp(context, 12), 0, 0, 0)
+            setPadding(dp(12), 0, 0, 0)
         }
-        title.addView(label(context, "REALME", 11, GOLD, bold = true, spacing = 0.16f))
-        title.addView(label(context, "TV REMOTE", 18, TEXT, bold = true), topMargin(context, 3))
+        title.addView(label("REALME", 10, GOLD, bold = true, spacing = 0.2f))
+        title.addView(label("TV REMOTE", 18, TEXT, bold = true), topMargin(2))
         header.addView(title, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
-        header.addView(iconButton(context, Icon.SETTINGS, "Pengaturan", SURFACE, 44, onSettings))
-        content.addView(header)
-
-        val statusRow = LinearLayout(context).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-            setPadding(dp(context, 12), dp(context, 10), dp(context, 12), dp(context, 10))
-            background = rounded(context, SURFACE, 8, SURFACE)
-        }
-        statusRow.addView(statusDot, params(context, 8, 8))
-        statusRow.addView(statusLabel, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply {
-            marginStart = dp(context, 9)
+        header.addView(iconButton(Icon.SETTINGS, "Buka pengaturan", SURFACE, 46) {
+            selectPage(Page.SETTINGS)
         })
-        val protocol = label(context, "REMOTE V2", 9, MUTED, bold = true, spacing = 0.1f)
-        statusRow.addView(protocol)
-        content.addView(statusRow, topMargin(context, 17))
+        return header
     }
 
-    private fun buildConnectionSection(context: Context) {
-        sectionTitle(context, "PERANGKAT TV", "JARINGAN LOKAL")
-        val card = panel(context, outlined = true)
-        val deviceRow = LinearLayout(context).apply {
+    private fun buildStatusBar(): View = LinearLayout(context).apply {
+        orientation = LinearLayout.HORIZONTAL
+        gravity = Gravity.CENTER_VERTICAL
+        setPadding(dp(13), dp(10), dp(13), dp(10))
+        background = rounded(SURFACE, 14, EDGE)
+        addView(statusDot, params(8, 8))
+        addView(statusLabel, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply {
+            marginStart = dp(9)
+            marginEnd = dp(8)
+        })
+        addView(label("ANDROID TV  ·  REMOTE V2", 8, MUTED, bold = true, spacing = 0.04f))
+    }
+
+    private fun buildRemotePage(connectButton: View) {
+        remotePage.addView(
+            label("KONTROL TV", 9, GOLD, bold = true, spacing = 0.16f),
+            topMargin(15),
+        )
+        remotePage.addView(label("Semua kendali,\nsatu sentuhan.", 26, TEXT, bold = true), topMargin(5))
+        remotePage.addView(
+            label("Nikmati pengalaman menonton yang lebih nyaman.", 12, MUTED),
+            topMargin(5),
+        )
+        remotePage.addView(sectionHeading("PERANGKAT AKTIF", "JARINGAN LOKAL"), topMargin(22))
+        remotePage.addView(buildDeviceCard(connectButton))
+        remotePage.addView(sectionHeading("REMOTE CONTROL", "NAVIGASI PRESISI"), topMargin(22))
+        remotePage.addView(buildDirectionalPad(), topMargin(3))
+        remotePage.addView(sectionHeading("AKSES CEPAT", "KONTROL UTAMA"), topMargin(22))
+        remotePage.addView(buildQuickControls(), topMargin(3))
+        remotePage.addView(sectionHeading("LAINNYA", "KONTROL TV"), topMargin(22))
+        remotePage.addView(buildSecondaryControls(), topMargin(3))
+        remotePage.addView(
+            label("Ketuk Keyboard untuk mengirim teks ke TV.", 10, MUTED),
+            topMargin(12),
+        )
+    }
+
+    private fun buildDeviceCard(connectButton: View): View = LinearLayout(context).apply {
+        orientation = LinearLayout.VERTICAL
+        setPadding(dp(15), dp(15), dp(15), dp(15))
+        background = roundedGradient(
+            intArrayOf(0xff24262b.toInt(), SURFACE),
+            20,
+            EDGE_GOLD,
+        )
+        val row = LinearLayout(context).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
         }
-        val tvMark = iconBadge(context, Icon.TV)
-        deviceRow.addView(tvMark, params(context, 42, 42))
+        row.addView(buildTvArtwork(), params(62, 62))
         val labels = LinearLayout(context).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(dp(context, 11), 0, dp(context, 5), 0)
+            setPadding(dp(12), 0, dp(7), 0)
         }
-        labels.addView(deviceName)
-        labels.addView(deviceAddress, topMargin(context, 3))
-        deviceRow.addView(labels, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
-        val scan = LinearLayout(context).apply {
-            gravity = Gravity.CENTER
-            orientation = LinearLayout.HORIZONTAL
-            setPadding(dp(context, 9), dp(context, 8), dp(context, 9), dp(context, 8))
-            background = ripple(context, SURFACE_RAISED, 9)
-            isClickable = true
-            isFocusable = true
-            contentDescription = "Cari perangkat TV"
-            setOnClickListener { onScan() }
-        }
-        scan.addView(scanProgress, params(context, 16, 16))
-        scan.addView(IconView(context, Icon.SCAN, GOLD), params(context, 16, 16).apply {
-            marginStart = dp(context, 4)
+        labels.addView(label("PERANGKAT", 8, MUTED, bold = true, spacing = 0.12f))
+        labels.addView(deviceName, topMargin(5))
+        labels.addView(deviceAddress, topMargin(3))
+        labels.addView(deviceStatus, topMargin(7))
+        row.addView(labels, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+        row.addView(scanButton)
+        addView(row)
+        addView(View(context).apply { setBackgroundColor(EDGE) }, LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, dp(1),
+        ).apply {
+            topMargin = dp(14)
+            bottomMargin = dp(13)
         })
-        scan.addView(scanLabel, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
-            marginStart = dp(context, 6)
-        })
-        deviceRow.addView(scan)
-        card.addView(deviceRow)
-
-        deviceList.setPadding(0, dp(context, 11), 0, 0)
-        card.addView(deviceList)
-        card.addView(connectionButton, topMargin(context, 14))
-        content.addView(card)
+        addView(connectButton)
     }
 
-    private fun buildRemoteSection(context: Context) {
-        sectionTitle(context, "REMOTE", "KONTROL TV")
-        val card = panel(context)
-        val top = LinearLayout(context).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-        }
-        top.addView(label(context, "NAVIGASI", 10, MUTED, bold = true, spacing = 0.12f),
-            LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
-        val power = actionButton(context, "POWER", primary = true, onClick = { onRemoteKey(TvKey.POWER) }, icon = Icon.POWER)
-        top.addView(power, params(context, 105, 40))
-        remoteControls.add(power)
-        card.addView(top)
+    private fun buildTvArtwork(): View = FrameLayout(context).apply {
+        background = roundedGradient(intArrayOf(0xff393221.toInt(), 0xff24221d.toInt()), 17, EDGE_GOLD)
+        addView(IconView(Icon.TV, GOLD), FrameLayout.LayoutParams(dp(35), dp(35), Gravity.CENTER))
+        addView(View(context).apply { background = circle(GOLD) }, FrameLayout.LayoutParams(
+            dp(4), dp(4), Gravity.TOP or Gravity.END,
+        ).apply {
+            topMargin = dp(9)
+            marginEnd = dp(9)
+        })
+    }
 
-        val dial = FrameLayout(context).apply {
-            background = rounded(context, DIAL, 124, EDGE)
+    private fun buildScanButton(): View = LinearLayout(context).apply {
+        orientation = LinearLayout.VERTICAL
+        gravity = Gravity.CENTER
+        setPadding(dp(9), dp(7), dp(9), dp(7))
+        background = ripple(SURFACE_RAISED, 12)
+        isClickable = true
+        isFocusable = true
+        contentDescription = "Cari perangkat TV"
+        setOnClickListener { onScan() }
+        setOnTouchListener { view, event -> pressFeedback(view, event) }
+        addView(scanProgress, params(15, 15))
+        addView(IconView(Icon.SCAN, GOLD).apply {
+            visibility = View.VISIBLE
+        }, params(20, 20).apply { topMargin = dp(2) })
+        addView(scanLabel, topMargin(2))
+    }
+
+    private fun buildDirectionalPad(): View {
+        val size = (context.resources.displayMetrics.widthPixels /
+            context.resources.displayMetrics.density).toInt() - 68
+        val diameter = size.coerceIn(238, 286)
+        val pad = FrameLayout(context).apply {
+            contentDescription = "Directional pad"
+            addView(DpadSurface(), FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.MATCH_PARENT,
+            ))
         }
         val grid = GridLayout(context).apply {
             rowCount = 3
             columnCount = 3
-            alignmentMode = GridLayout.ALIGN_BOUNDS
+            useDefaultMargins = false
+            setPadding(dp(10), dp(10), dp(10), dp(10))
         }
-        val icons = listOf(
-            null, Icon.UP, null,
-            Icon.LEFT, null, Icon.RIGHT,
-            null, Icon.DOWN, null,
+        val directions = mapOf(
+            1 to (Icon.UP to TvKey.UP),
+            3 to (Icon.LEFT to TvKey.LEFT),
+            5 to (Icon.RIGHT to TvKey.RIGHT),
+            7 to (Icon.DOWN to TvKey.DOWN),
         )
-        val keys = listOf(
-            null, TvKey.UP, null,
-            TvKey.LEFT, null, TvKey.RIGHT,
-            null, TvKey.DOWN, null,
-        )
-        icons.forEachIndexed { index, icon ->
-            val key = keys[index]
+        for (index in 0 until 9) {
             val control = when {
-                index == 4 -> actionButton(context, "OK", primary = true, onClick = { onRemoteKey(TvKey.OK) }, circle = true)
-                icon != null && key != null -> iconButton(context, icon, key.name, DIAL_BUTTON, 62) { onRemoteKey(key) }
-                else -> View(context)
+                index == 4 -> centerOkButton()
+                directions.containsKey(index) -> {
+                    val (icon, key) = directions.getValue(index)
+                    directionalButton(icon, key)
+                }
+                else -> View(context).apply {
+                    importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
+                }
             }
-            if (key != null || index == 4) remoteControls.add(control)
-            grid.addView(control, GridLayout.LayoutParams().apply {
-                width = dp(context, 66)
-                height = dp(context, 66)
-                rowSpec = GridLayout.spec(index / 3)
-                columnSpec = GridLayout.spec(index % 3)
-                setMargins(dp(context, 2), dp(context, 2), dp(context, 2), dp(context, 2))
+            grid.addView(control, GridLayout.LayoutParams(
+                GridLayout.spec(index / 3, 1, 1f),
+                GridLayout.spec(index % 3, 1, 1f),
+            ).apply {
+                width = 0
+                height = 0
+                setMargins(dp(2), dp(2), dp(2), dp(2))
             })
         }
-        dial.addView(grid, FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.CENTER))
-        card.addView(dial, centered(context, 220, 220, top = 13))
-
-        val nav = LinearLayout(context).apply { orientation = LinearLayout.HORIZONTAL }
-        listOf(
-            Triple(Icon.HOME, "HOME", TvKey.HOME),
-            Triple(Icon.BACK, "BACK", TvKey.BACK),
-            Triple(Icon.MENU, "MENU", TvKey.MENU),
-        ).forEach { (icon, text, key) ->
-            val control = actionButton(context, text, primary = false, onClick = { onRemoteKey(key) }, icon = icon)
-            remoteControls.add(control)
-            nav.addView(control, LinearLayout.LayoutParams(0, dp(context, 46), 1f).apply {
-                marginStart = dp(context, 3)
-                marginEnd = dp(context, 3)
-            })
+        pad.addView(grid, FrameLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT,
+            ViewGroup.LayoutParams.MATCH_PARENT,
+        ))
+        return FrameLayout(context).apply {
+            addView(pad, FrameLayout.LayoutParams(dp(diameter), dp(diameter), Gravity.CENTER))
         }
-        card.addView(nav, topMargin(context, 13))
-        content.addView(card)
     }
 
-    private fun buildQuickControls(context: Context) {
-        sectionTitle(context, "AKSES CEPAT", "VOLUME & CHANNEL")
-        val card = panel(context)
-        val volume = LinearLayout(context).apply { orientation = LinearLayout.HORIZONTAL }
-        listOf(
-            Triple(Icon.MINUS, "VOL −", TvKey.VOLUME_DOWN),
+    private fun directionalButton(icon: Icon, key: TvKey): View = FrameLayout(context).apply {
+        background = ripple(SURFACE_RAISED, 48)
+        isClickable = true
+        isFocusable = true
+        contentDescription = when (key) {
+            TvKey.UP -> "Atas"
+            TvKey.DOWN -> "Bawah"
+            TvKey.LEFT -> "Kiri"
+            else -> "Kanan"
+        }
+        setOnClickListener { onRemoteKey(key) }
+        setOnTouchListener { view, event -> pressFeedback(view, event) }
+        addView(IconView(icon, TEXT), FrameLayout.LayoutParams(dp(22), dp(22), Gravity.CENTER))
+        remoteControls.add(this)
+    }
+
+    private fun centerOkButton(): View = FrameLayout(context).apply {
+        isClickable = true
+        isFocusable = true
+        contentDescription = "OK"
+        setOnClickListener { onRemoteKey(TvKey.OK) }
+        setOnTouchListener { view, event -> pressFeedback(view, event) }
+        val button = TextView(context).apply {
+            text = "OK"
+            textSize = 12f
+            typeface = Typeface.create("sans-serif", Typeface.BOLD)
+            setTextColor(BACKGROUND)
+            gravity = Gravity.CENTER
+            background = ripple(GOLD, 28)
+        }
+        addView(button, FrameLayout.LayoutParams(dp(54), dp(54), Gravity.CENTER))
+        remoteControls.add(this)
+    }
+
+    private fun buildQuickControls(): View {
+        val grid = GridLayout(context).apply {
+            columnCount = 3
+            rowCount = 2
+            useDefaultMargins = false
+        }
+        val controls = listOf(
+            Triple(Icon.POWER, "POWER", TvKey.POWER),
+            Triple(Icon.VOLUME_DOWN, "VOLUME −", TvKey.VOLUME_DOWN),
             Triple(Icon.MUTE, "MUTE", TvKey.MUTE),
-            Triple(Icon.PLUS, "VOL +", TvKey.VOLUME_UP),
-        ).forEach { (icon, text, key) ->
-            val control = actionButton(context, text, primary = false, onClick = { onRemoteKey(key) }, icon = icon)
-            remoteControls.add(control)
-            volume.addView(control, LinearLayout.LayoutParams(0, dp(context, 48), 1f).apply {
-                marginStart = dp(context, 3)
-                marginEnd = dp(context, 3)
+            Triple(Icon.VOLUME_UP, "VOLUME +", TvKey.VOLUME_UP),
+            Triple(Icon.CHANNEL_DOWN, "CHANNEL −", TvKey.CHANNEL_DOWN),
+            Triple(Icon.CHANNEL_UP, "CHANNEL +", TvKey.CHANNEL_UP),
+        )
+        controls.forEachIndexed { index, (icon, title, key) ->
+            val tile = controlTile(icon, title, { onRemoteKey(key) })
+            grid.addView(tile, GridLayout.LayoutParams(
+                GridLayout.spec(index / 3, 1, 1f),
+                GridLayout.spec(index % 3, 1, 1f),
+            ).apply {
+                width = 0
+                height = dp(78)
+                setMargins(dp(3), dp(3), dp(3), dp(3))
             })
+            remoteControls.add(tile)
         }
-        card.addView(volume)
-
-        val channels = LinearLayout(context).apply { orientation = LinearLayout.HORIZONTAL }
-        listOf(
-            Triple(Icon.DOWN, "CHANNEL −", TvKey.CHANNEL_DOWN),
-            Triple(Icon.UP, "CHANNEL +", TvKey.CHANNEL_UP),
-        ).forEach { (icon, text, key) ->
-            val control = actionButton(context, text, primary = false, onClick = { onRemoteKey(key) }, icon = icon)
-            remoteControls.add(control)
-            channels.addView(control, LinearLayout.LayoutParams(0, dp(context, 48), 1f).apply {
-                marginStart = dp(context, 3)
-                marginEnd = dp(context, 3)
-            })
-        }
-        card.addView(channels, topMargin(context, 8))
-        content.addView(card)
+        return grid
     }
 
-    private fun buildKeyboard(context: Context) {
-        val keyboard = actionButton(context, "BUKA KEYBOARD HP", primary = true, onClick = onKeyboard, icon = Icon.KEYBOARD)
-        keyboard.minimumHeight = dp(context, 54)
-        remoteControls.add(keyboard)
-        content.addView(keyboard, topMargin(context, 14))
-        content.addView(label(context, "Teks dikirim melalui Android TV Remote IME.", 11, MUTED), topMargin(context, 8))
+    private fun buildSecondaryControls(): View {
+        val row = LinearLayout(context).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER
+        }
+        val controls = listOf(
+            Triple(Icon.HOME, "HOME", { onRemoteKey(TvKey.HOME) }),
+            Triple(Icon.BACK, "BACK", { onRemoteKey(TvKey.BACK) }),
+            Triple(Icon.MENU, "MENU", { onRemoteKey(TvKey.MENU) }),
+            Triple(Icon.KEYBOARD, "KEYBOARD", onKeyboard),
+        )
+        controls.forEach { (icon, title, action) ->
+            val tile = controlTile(icon, title, action, compact = true)
+            row.addView(tile, LinearLayout.LayoutParams(0, dp(72), 1f).apply {
+                marginEnd = dp(5)
+            })
+            remoteControls.add(tile)
+        }
+        return row
+    }
+
+    private fun controlTile(
+        icon: Icon,
+        title: String,
+        onClick: () -> Unit,
+        compact: Boolean = false,
+    ): View = LinearLayout(context).apply {
+        orientation = LinearLayout.VERTICAL
+        gravity = Gravity.CENTER
+        setPadding(dp(4), dp(7), dp(4), dp(7))
+        background = ripple(SURFACE, 15)
+        isClickable = true
+        isFocusable = true
+        contentDescription = title
+        setOnClickListener { onClick() }
+        setOnTouchListener { view, event -> pressFeedback(view, event) }
+        addView(IconView(icon, if (icon == Icon.POWER) GOLD else SOFT_GOLD),
+            params(if (compact) 19 else 21, if (compact) 19 else 21))
+        addView(label(title, if (compact) 8 else 9, TEXT, bold = true, spacing = 0.01f).apply {
+            gravity = Gravity.CENTER
+            maxLines = 1
+        }, topMargin(if (compact) 5 else 7))
+    }
+
+    private fun buildDevicesPage(connectButton: View) {
+        devicesPage.addView(label("PERANGKAT", 9, GOLD, bold = true, spacing = 0.16f), topMargin(15))
+        devicesPage.addView(label("Pilih layar Anda.", 25, TEXT, bold = true), topMargin(5))
+        devicesPage.addView(
+            label("Temukan TV yang terhubung ke jaringan Wi-Fi yang sama.", 12, MUTED),
+            topMargin(5),
+        )
+        val scanAction = LinearLayout(context).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            addView(IconView(Icon.SCAN, GOLD), params(18, 18))
+            addView(label("CARI PERANGKAT", 10, GOLD, bold = true, spacing = 0.04f), topMarginHorizontal(8))
+            setPadding(dp(14), dp(12), dp(14), dp(12))
+            background = ripple(SURFACE, 14)
+            isClickable = true
+            isFocusable = true
+            contentDescription = "Cari perangkat TV"
+            setOnClickListener { onScan() }
+            setOnTouchListener { view, event -> pressFeedback(view, event) }
+        }
+        devicesPage.addView(scanAction, topMargin(20))
+        devicesPage.addView(sectionHeading("TERDETEKSI", "PILIH PERANGKAT"), topMargin(21))
+        val listCard = LinearLayout(context).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(10), dp(10), dp(10), dp(10))
+            background = rounded(SURFACE, 18, EDGE)
+            addView(deviceList)
+        }
+        devicesPage.addView(listCard)
+        devicesPage.addView(connectButton, topMargin(14))
+        devicesPage.addView(
+            label("Pastikan ponsel dan TV berada di jaringan lokal yang sama.", 10, MUTED),
+            topMargin(10),
+        )
+    }
+
+    private fun buildSettingsPage() {
+        settingsPage.addView(label("PREFERENSI", 9, GOLD, bold = true, spacing = 0.16f), topMargin(15))
+        settingsPage.addView(label("Pengaturan.", 25, TEXT, bold = true), topMargin(5))
+        settingsPage.addView(
+            label("Kelola pairing dan informasi aplikasi.", 12, MUTED),
+            topMargin(5),
+        )
+        settingsPage.addView(sectionHeading("AKUN PERANGKAT", "PRIVASI"), topMargin(22))
+        settingsPage.addView(
+            settingsRow(Icon.TV, "Pairing TV", "Lupakan perangkat tersimpan atau lihat detail.") {
+                onSettings()
+            },
+            topMargin(3),
+        )
+        settingsPage.addView(sectionHeading("TENTANG", "REALME TV REMOTE"), topMargin(22))
+        settingsPage.addView(
+            settingsRow(Icon.INFO, "Tentang aplikasi", "Android TV Remote Protocol versi 2.") {
+                onSettings()
+            },
+            topMargin(3),
+        )
+        settingsPage.addView(
+            label("Koneksi dan kredensial pairing disimpan secara lokal di perangkat ini.", 10, MUTED),
+            topMargin(14),
+        )
+    }
+
+    private fun settingsRow(icon: Icon, title: String, description: String, onClick: () -> Unit): View =
+        LinearLayout(context).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(dp(13), dp(13), dp(13), dp(13))
+            background = ripple(SURFACE, 16)
+            isClickable = true
+            isFocusable = true
+            setOnClickListener { onClick() }
+            setOnTouchListener { view, event -> pressFeedback(view, event) }
+            addView(FrameLayout(context).apply {
+                background = rounded(SURFACE_RAISED, 12, EDGE)
+                addView(IconView(icon, GOLD), FrameLayout.LayoutParams(dp(21), dp(21), Gravity.CENTER))
+            }, params(44, 44))
+            val textColumn = LinearLayout(context).apply {
+                orientation = LinearLayout.VERTICAL
+                setPadding(dp(12), 0, dp(8), 0)
+            }
+            textColumn.addView(label(title, 13, TEXT, bold = true))
+            textColumn.addView(label(description, 10, MUTED).apply { maxLines = 2 }, topMargin(4))
+            addView(textColumn, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+            addView(IconView(Icon.CHEVRON, MUTED), params(18, 18))
+        }
+
+    private fun buildBottomNavigation(): View = LinearLayout(context).apply {
+        orientation = LinearLayout.HORIZONTAL
+        gravity = Gravity.CENTER
+        setPadding(dp(10), dp(7), dp(10), dp(7))
+        background = roundedGradient(
+            intArrayOf(0xff1a1c21.toInt(), 0xff14161a.toInt()),
+            20,
+            EDGE,
+        )
+        listOf(
+            Triple(Page.REMOTE, Icon.REMOTE, "Remote"),
+            Triple(Page.DEVICES, Icon.DEVICES, "Devices"),
+            Triple(Page.SETTINGS, Icon.SETTINGS, "Settings"),
+        ).forEach { (page, icon, title) ->
+            val iconView = IconView(icon, MUTED)
+            val textView = label(title, 9, MUTED, bold = true)
+            val item = LinearLayout(context).apply {
+                orientation = LinearLayout.VERTICAL
+                gravity = Gravity.CENTER
+                setPadding(dp(4), dp(4), dp(4), dp(4))
+                isClickable = true
+                isFocusable = true
+                contentDescription = title
+                setOnClickListener { selectPage(page) }
+                setOnTouchListener { view, event -> pressFeedback(view, event) }
+                addView(iconView, params(20, 20))
+                addView(textView, topMargin(3))
+            }
+            navItems.add(NavItem(page, item, iconView, textView))
+            addView(item, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f))
+        }
+    }
+
+    private fun selectPage(page: Page) {
+        if (page == currentPage) return
+        pages[currentPage.ordinal].visibility = View.GONE
+        currentPage = page
+        val destination = pages[page.ordinal]
+        destination.alpha = 0f
+        destination.translationY = dp(6).toFloat()
+        destination.visibility = View.VISIBLE
+        destination.animate()
+            .alpha(1f)
+            .translationY(0f)
+            .setDuration(180)
+            .start()
+        scrollView.smoothScrollTo(0, 0)
+        updateNavigation()
+    }
+
+    private fun updateNavigation() {
+        navItems.forEach { item ->
+            val selected = item.page == currentPage
+            item.container.background = if (selected) rounded(SELECTED, 13, SELECTED) else null
+            item.icon.setTint(if (selected) GOLD else MUTED)
+            item.label.setTextColor(if (selected) SOFT_GOLD else MUTED)
+        }
     }
 
     private fun renderDevices(state: RemoteScreenState) {
         deviceList.removeAllViews()
         if (state.devices.isEmpty()) {
-            val empty = LinearLayout(deviceList.context).apply {
-                gravity = Gravity.CENTER_VERTICAL
+            val empty = LinearLayout(context).apply {
                 orientation = LinearLayout.HORIZONTAL
-                setPadding(dp(context, 11), dp(context, 10), dp(context, 11), dp(context, 10))
-                background = rounded(context, SURFACE_RAISED, 8, SURFACE_RAISED)
+                gravity = Gravity.CENTER_VERTICAL
+                setPadding(dp(13), dp(15), dp(13), dp(15))
+                background = rounded(SURFACE_RAISED, 13, EDGE)
             }
             val indicator = if (state.searching) ProgressBar(context).apply {
                 isIndeterminate = true
                 indeterminateTintList = ColorStateList.valueOf(GOLD)
-            } else IconView(context, Icon.TV, MUTED)
-            empty.addView(indicator, params(context, 17, 17))
-            empty.addView(label(
-                context,
-                if (state.searching) "Sedang mencari TV di Wi-Fi..." else "Belum ada perangkat. Pastikan TV dan HP memakai Wi-Fi yang sama.",
-                11,
-                MUTED,
-            ), LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply {
-                marginStart = dp(context, 9)
-            })
+            } else IconView(Icon.WIFI, MUTED)
+            empty.addView(indicator, params(20, 20))
+            empty.addView(
+                label(
+                    if (state.searching) "Mencari TV di jaringan Wi-Fi..."
+                    else "Belum ada perangkat. Mulai pencarian untuk menemukan TV.",
+                    11,
+                    MUTED,
+                ).apply { maxLines = 3 },
+                LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply {
+                    marginStart = dp(11)
+                },
+            )
             deviceList.addView(empty)
             return
         }
@@ -324,112 +622,82 @@ class RemoteScreen(
         state.devices.forEach { device ->
             val selected = state.selectedDevice?.host == device.host
             val row = LinearLayout(context).apply {
-                gravity = Gravity.CENTER_VERTICAL
                 orientation = LinearLayout.HORIZONTAL
-                setPadding(dp(context, 10), dp(context, 9), dp(context, 10), dp(context, 9))
-                background = ripple(context, if (selected) SELECTED else SURFACE_RAISED, 8)
+                gravity = Gravity.CENTER_VERTICAL
+                setPadding(dp(11), dp(11), dp(11), dp(11))
+                background = ripple(if (selected) SELECTED else SURFACE_RAISED, 13)
                 isClickable = true
                 isFocusable = true
+                contentDescription = "${device.name}, ${device.host}"
                 setOnClickListener { onSelectDevice(device) }
+                setOnTouchListener { view, event -> pressFeedback(view, event) }
             }
-            row.addView(IconView(context, Icon.TV, if (selected) GOLD else MUTED), params(context, 17, 17))
+            row.addView(FrameLayout(context).apply {
+                background = rounded(if (selected) 0xff393221.toInt() else SURFACE, 12, EDGE)
+                addView(IconView(Icon.TV, if (selected) GOLD else MUTED),
+                    FrameLayout.LayoutParams(dp(21), dp(21), Gravity.CENTER))
+            }, params(42, 42))
             val textColumn = LinearLayout(context).apply {
                 orientation = LinearLayout.VERTICAL
-                setPadding(dp(context, 9), 0, 0, 0)
+                setPadding(dp(11), 0, dp(5), 0)
             }
-            textColumn.addView(label(context, device.name, 12, TEXT, bold = true))
-            textColumn.addView(label(context, device.host, 10, MUTED), topMargin(context, 2))
+            textColumn.addView(label(device.name, 12, TEXT, bold = true).apply { maxLines = 2 })
+            textColumn.addView(label(device.host, 10, MUTED).apply { maxLines = 1 }, topMargin(3))
             row.addView(textColumn, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
-            if (selected) row.addView(View(context).apply { background = circle(context, GOLD) }, params(context, 7, 7))
-            deviceList.addView(row, topMargin(context, 5))
+            if (selected) row.addView(View(context).apply { background = circle(GOLD) }, params(7, 7))
+            deviceList.addView(row, if (deviceList.childCount > 0) topMargin(7) else paramsMatchWrap())
         }
     }
 
-    private fun sectionTitle(context: Context, title: String, detail: String) {
-        val row = LinearLayout(context).apply {
-            gravity = Gravity.CENTER_VERTICAL
-            orientation = LinearLayout.HORIZONTAL
-        }
-        row.addView(label(context, title, 10, GOLD, bold = true, spacing = 0.12f),
-            LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
-        row.addView(label(context, detail, 9, MUTED, bold = true, spacing = 0.08f))
-        content.addView(row, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
-            topMargin = dp(context, 20)
-            bottomMargin = dp(context, 9)
-        })
-    }
-
-    private fun panel(context: Context, outlined: Boolean = false) = LinearLayout(context).apply {
-        orientation = LinearLayout.VERTICAL
-        setPadding(dp(context, 13), dp(context, 13), dp(context, 13), dp(context, 13))
-        background = rounded(context, SURFACE, 14, if (outlined) EDGE_GOLD else SURFACE)
-    }
-
-    private fun iconBadge(context: Context, icon: Icon) = FrameLayout(context).apply {
-        background = rounded(context, SURFACE_RAISED, 12, EDGE)
-        addView(IconView(context, icon, GOLD), FrameLayout.LayoutParams(dp(context, 21), dp(context, 21), Gravity.CENTER))
-    }
-
-    private fun iconButton(
-        context: Context,
-        icon: Icon,
-        description: String,
-        backgroundColor: Int,
-        size: Int,
-        onClick: () -> Unit,
-    ) = FrameLayout(context).apply {
-        background = ripple(context, backgroundColor, size / 2)
-        isClickable = true
-        isFocusable = true
-        contentDescription = description
-        setOnClickListener { onClick() }
-        setOnTouchListener { view, event -> pressFeedback(view, event) }
-        addView(IconView(context, icon, if (icon == Icon.POWER || icon == Icon.SETTINGS) GOLD else TEXT),
-            FrameLayout.LayoutParams(dp(context, 22), dp(context, 22), Gravity.CENTER))
-    }
-
-    private fun actionButton(
-        context: Context,
-        title: String,
-        primary: Boolean,
-        onClick: () -> Unit,
-        icon: Icon? = null,
-        circle: Boolean = false,
-    ) = LinearLayout(context).apply {
+    private fun sectionHeading(title: String, detail: String): View = LinearLayout(context).apply {
         orientation = LinearLayout.HORIZONTAL
-        gravity = Gravity.CENTER
-        setPadding(dp(context, 8), dp(context, 7), dp(context, 8), dp(context, 7))
-        background = ripple(context, if (primary) GOLD else SURFACE_RAISED, if (circle) 40 else 10)
-        isClickable = true
-        isFocusable = true
-        contentDescription = title
-        setOnClickListener { onClick() }
-        setOnTouchListener { view, event -> pressFeedback(view, event) }
-        if (icon != null) addView(IconView(context, icon, if (primary) BACKGROUND else GOLD), params(context, 18, 18).apply {
-            marginEnd = dp(context, 7)
-        })
-        addView(label(context, title, if (circle) 13 else 10, if (primary) BACKGROUND else TEXT, bold = true, spacing = 0.035f))
+        gravity = Gravity.CENTER_VERTICAL
+        addView(label(title, 9, SOFT_GOLD, bold = true, spacing = 0.12f),
+            LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+        addView(label(detail, 8, MUTED, bold = true, spacing = 0.05f))
     }
 
-    private fun ripple(context: Context, color: Int, radius: Int): RippleDrawable = RippleDrawable(
-        ColorStateList.valueOf(0x33FFFFFF),
-        rounded(context, color, radius, color),
-        null,
-    )
-
-    private fun rounded(context: Context, color: Int, radius: Int, stroke: Int) = GradientDrawable().apply {
-        setColor(color)
-        cornerRadius = dp(context, radius).toFloat()
-        if (stroke != color) setStroke(dp(context, 1), stroke)
+    private fun primaryButton(title: String, onClick: () -> Unit): Pair<View, TextView> {
+        val titleView = label(title, 10, BACKGROUND, bold = true, spacing = 0.06f)
+        val button = LinearLayout(context).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER
+            setPadding(dp(12), dp(14), dp(12), dp(14))
+            minimumHeight = dp(50)
+            background = ripple(GOLD, 14)
+            isClickable = true
+            isFocusable = true
+            contentDescription = title
+            setOnClickListener { onClick() }
+            setOnTouchListener { view, event -> pressFeedback(view, event) }
+            addView(IconView(Icon.PAIR, BACKGROUND), params(17, 17).apply {
+                marginEnd = dp(8)
+            })
+            addView(titleView)
+        }
+        return button to titleView
     }
 
-    private fun circle(context: Context, color: Int) = GradientDrawable().apply {
-        shape = GradientDrawable.OVAL
-        setColor(color)
-    }
+    private fun iconButton(icon: Icon, description: String, color: Int, size: Int, onClick: () -> Unit): View =
+        FrameLayout(context).apply {
+            background = ripple(color, size / 2)
+            isClickable = true
+            isFocusable = true
+            contentDescription = description
+            setOnClickListener { onClick() }
+            setOnTouchListener { view, event -> pressFeedback(view, event) }
+            addView(IconView(icon, GOLD), FrameLayout.LayoutParams(dp(21), dp(21), Gravity.CENTER))
+            layoutParams = params(size, size)
+        }
 
-    private fun label(context: Context, value: String, size: Int, color: Int, bold: Boolean = false, spacing: Float = 0f) = TextView(context).apply {
-        text = value
+    private fun label(
+        text: String,
+        size: Int,
+        color: Int,
+        bold: Boolean = false,
+        spacing: Float = 0f,
+    ) = TextView(context).apply {
+        this.text = text
         textSize = size.toFloat()
         setTextColor(color)
         typeface = Typeface.create("sans-serif", if (bold) Typeface.BOLD else Typeface.NORMAL)
@@ -437,28 +705,128 @@ class RemoteScreen(
         includeFontPadding = true
     }
 
-    private fun centered(context: Context, width: Int, height: Int, top: Int = 0) = LinearLayout.LayoutParams(dp(context, width), dp(context, height)).apply {
-        gravity = Gravity.CENTER_HORIZONTAL
-        topMargin = dp(context, top)
+    private fun ripple(color: Int, radius: Int): RippleDrawable = RippleDrawable(
+        ColorStateList.valueOf(0x33FFFFFF),
+        rounded(color, radius, color),
+        null,
+    )
+
+    private fun rounded(color: Int, radius: Int, stroke: Int) = GradientDrawable().apply {
+        setColor(color)
+        cornerRadius = dp(radius).toFloat()
+        if (stroke != color) setStroke(dp(1), stroke)
     }
 
-    private fun params(context: Context, width: Int, height: Int) = LinearLayout.LayoutParams(dp(context, width), dp(context, height))
-
-    private fun topMargin(context: Context, margin: Int) = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
-        topMargin = dp(context, margin)
+    private fun roundedGradient(colors: IntArray, radius: Int, stroke: Int) = GradientDrawable(
+        GradientDrawable.Orientation.TL_BR,
+        colors,
+    ).apply {
+        cornerRadius = dp(radius).toFloat()
+        setStroke(dp(1), stroke)
     }
 
-    private fun dp(context: Context, value: Int): Int = (value * context.resources.displayMetrics.density).toInt()
+    private fun circle(color: Int) = GradientDrawable().apply {
+        shape = GradientDrawable.OVAL
+        setColor(color)
+    }
 
-    private enum class Icon { SETTINGS, TV, SCAN, POWER, UP, DOWN, LEFT, RIGHT, HOME, BACK, MENU, MINUS, PLUS, MUTE, KEYBOARD }
+    private fun params(width: Int, height: Int) =
+        LinearLayout.LayoutParams(dp(width), dp(height))
 
-    private class IconView(context: Context, private val icon: Icon, private val tint: Int) : View(context) {
+    private fun paramsMatchWrap() = LinearLayout.LayoutParams(
+        ViewGroup.LayoutParams.MATCH_PARENT,
+        ViewGroup.LayoutParams.WRAP_CONTENT,
+    )
+
+    private fun topMargin(margin: Int) = LinearLayout.LayoutParams(
+        ViewGroup.LayoutParams.WRAP_CONTENT,
+        ViewGroup.LayoutParams.WRAP_CONTENT,
+    ).apply {
+        topMargin = dp(margin)
+    }
+
+    private fun topMarginHorizontal(margin: Int) = LinearLayout.LayoutParams(
+        ViewGroup.LayoutParams.WRAP_CONTENT,
+        ViewGroup.LayoutParams.WRAP_CONTENT,
+    ).apply {
+        marginStart = dp(margin)
+    }
+
+    private fun dp(value: Int): Int =
+        (value * context.resources.displayMetrics.density).toInt()
+
+    private fun TextView.parentAsView(): View = parent as View
+
+    private data class NavItem(
+        val page: Page,
+        val container: View,
+        val icon: IconView,
+        val label: TextView,
+    )
+
+    private enum class Page { REMOTE, DEVICES, SETTINGS }
+
+    private enum class Icon {
+        SETTINGS, TV, SCAN, POWER, UP, DOWN, LEFT, RIGHT, HOME, BACK, MENU,
+        VOLUME_UP, VOLUME_DOWN, MUTE, KEYBOARD, CHANNEL_UP, CHANNEL_DOWN,
+        REMOTE, DEVICES, WIFI, PAIR, INFO, CHEVRON,
+    }
+
+    private inner class DpadSurface : View(context) {
+        private val fillPaint = Paint(Paint.ANTI_ALIAS_FLAG)
+        private val strokePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            style = Paint.Style.STROKE
+            strokeWidth = dp(1).toFloat()
+            color = EDGE
+        }
+        private val accentPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            style = Paint.Style.STROKE
+            strokeWidth = dp(1).toFloat()
+            color = 0x665d5138
+        }
+
+        override fun onDraw(canvas: Canvas) {
+            super.onDraw(canvas)
+            val diameter = minOf(width, height).toFloat() - dp(2)
+            val centerX = width / 2f
+            val centerY = height / 2f
+            val radius = diameter / 2f
+            fillPaint.shader = RadialGradient(
+                centerX,
+                centerY,
+                radius,
+                intArrayOf(SURFACE_RAISED, 0xff14161b.toInt()),
+                null,
+                Shader.TileMode.CLAMP,
+            )
+            canvas.drawCircle(centerX, centerY, radius, fillPaint)
+            fillPaint.shader = null
+            canvas.drawCircle(centerX, centerY, radius, strokePaint)
+            canvas.drawCircle(centerX, centerY, radius * 0.72f, accentPaint)
+            canvas.drawCircle(centerX, centerY, radius * 0.32f, accentPaint)
+        }
+    }
+
+    private inner class IconView(
+        private val icon: Icon,
+        tint: Int,
+    ) : View(context) {
         private val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
             color = tint
             style = Paint.Style.STROKE
-            strokeWidth = 2f
+            strokeWidth = 1.8f
             strokeCap = Paint.Cap.ROUND
             strokeJoin = Paint.Join.ROUND
+        }
+        private val fill = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = tint
+            style = Paint.Style.FILL
+        }
+
+        fun setTint(color: Int) {
+            paint.color = color
+            fill.color = color
+            invalidate()
         }
 
         override fun onDraw(canvas: Canvas) {
@@ -469,13 +837,13 @@ class RemoteScreen(
             canvas.scale(scale, scale)
             when (icon) {
                 Icon.POWER -> {
-                    canvas.drawArc(RectF(5f, 5f, 19f, 19f), 40f, 280f, false, paint)
+                    canvas.drawArc(RectF(5f, 5f, 19f, 19f), 42f, 276f, false, paint)
                     canvas.drawLine(12f, 3f, 12f, 12f, paint)
                 }
-                Icon.UP -> arrow(canvas, 12f, 19f, 12f, 5f, paint)
-                Icon.DOWN -> arrow(canvas, 12f, 5f, 12f, 19f, paint)
-                Icon.LEFT -> arrow(canvas, 19f, 12f, 5f, 12f, paint)
-                Icon.RIGHT -> arrow(canvas, 5f, 12f, 19f, 12f, paint)
+                Icon.UP, Icon.CHANNEL_UP -> arrow(canvas, 12f, 19f, 12f, 5f)
+                Icon.DOWN, Icon.CHANNEL_DOWN -> arrow(canvas, 12f, 5f, 12f, 19f)
+                Icon.LEFT -> arrow(canvas, 19f, 12f, 5f, 12f)
+                Icon.RIGHT -> arrow(canvas, 5f, 12f, 19f, 12f)
                 Icon.BACK -> {
                     canvas.drawLine(19f, 12f, 5f, 12f, paint)
                     canvas.drawLine(5f, 12f, 11f, 6f, paint)
@@ -490,22 +858,10 @@ class RemoteScreen(
                     canvas.drawPath(path, paint)
                 }
                 Icon.MENU -> for (y in listOf(6f, 12f, 18f)) canvas.drawLine(5f, y, 19f, y, paint)
-                Icon.PLUS -> {
-                    canvas.drawLine(12f, 5f, 12f, 19f, paint)
-                    canvas.drawLine(5f, 12f, 19f, 12f, paint)
-                }
-                Icon.MINUS -> canvas.drawLine(5f, 12f, 19f, 12f, paint)
-                Icon.MUTE -> {
-                    val speaker = Path().apply {
-                        moveTo(4f, 9f); lineTo(8f, 9f); lineTo(13f, 5f); lineTo(13f, 19f); lineTo(8f, 15f); lineTo(4f, 15f); close()
-                    }
-                    canvas.drawPath(speaker, paint)
-                    canvas.drawLine(17f, 9f, 21f, 15f, paint)
-                    canvas.drawLine(21f, 9f, 17f, 15f, paint)
-                }
+                Icon.VOLUME_UP, Icon.VOLUME_DOWN, Icon.MUTE -> drawSpeaker(canvas, icon)
                 Icon.KEYBOARD -> {
                     canvas.drawRoundRect(RectF(3f, 5f, 21f, 19f), 2f, 2f, paint)
-                    for (x in listOf(7f, 12f, 17f)) canvas.drawLine(x, 9f, x, 9f, paint)
+                    for (x in listOf(7f, 12f, 17f)) canvas.drawCircle(x, 9f, 0.8f, fill)
                     canvas.drawLine(6f, 13f, 18f, 13f, paint)
                     canvas.drawLine(9f, 16f, 15f, 16f, paint)
                 }
@@ -527,76 +883,111 @@ class RemoteScreen(
                     }
                 }
                 Icon.TV -> {
-                    canvas.drawRoundRect(RectF(3f, 5f, 21f, 18f), 2f, 2f, paint)
+                    canvas.drawRoundRect(RectF(2f, 4f, 22f, 18f), 2.5f, 2.5f, paint)
                     canvas.drawLine(9f, 21f, 15f, 21f, paint)
                     canvas.drawLine(12f, 18f, 12f, 21f, paint)
-                    canvas.drawLine(8f, 3f, 12f, 5f, paint)
-                    canvas.drawLine(16f, 3f, 12f, 5f, paint)
+                    canvas.drawLine(8f, 2f, 12f, 4f, paint)
+                    canvas.drawLine(16f, 2f, 12f, 4f, paint)
                 }
+                Icon.REMOTE -> {
+                    canvas.drawRoundRect(RectF(7f, 2f, 17f, 22f), 4f, 4f, paint)
+                    canvas.drawCircle(12f, 7f, 1.2f, fill)
+                    canvas.drawCircle(12f, 12f, 1f, fill)
+                    canvas.drawLine(10f, 18f, 14f, 18f, paint)
+                }
+                Icon.DEVICES -> {
+                    canvas.drawRoundRect(RectF(2f, 4f, 17f, 18f), 2f, 2f, paint)
+                    canvas.drawLine(6f, 21f, 13f, 21f, paint)
+                    canvas.drawRoundRect(RectF(17f, 9f, 22f, 20f), 1.5f, 1.5f, paint)
+                }
+                Icon.WIFI -> {
+                    canvas.drawArc(RectF(3f, 4f, 21f, 21f), 225f, 90f, false, paint)
+                    canvas.drawArc(RectF(7f, 8f, 17f, 18f), 225f, 90f, false, paint)
+                    canvas.drawCircle(12f, 19f, 1f, fill)
+                }
+                Icon.PAIR -> {
+                    canvas.drawRoundRect(RectF(3f, 5f, 21f, 19f), 2f, 2f, paint)
+                    canvas.drawLine(7f, 10f, 17f, 10f, paint)
+                    canvas.drawLine(7f, 14f, 14f, 14f, paint)
+                    canvas.drawLine(16f, 16f, 18f, 18f, paint)
+                    canvas.drawLine(18f, 18f, 22f, 13f, paint)
+                }
+                Icon.INFO -> {
+                    canvas.drawCircle(12f, 12f, 9f, paint)
+                    canvas.drawCircle(12f, 7f, 0.8f, fill)
+                    canvas.drawLine(12f, 11f, 12f, 17f, paint)
+                }
+                Icon.CHEVRON -> arrow(canvas, 8f, 5f, 16f, 12f)
             }
             canvas.restore()
         }
 
-        private fun arrow(canvas: Canvas, x1: Float, y1: Float, x2: Float, y2: Float, paint: Paint) {
+        private fun drawSpeaker(canvas: Canvas, icon: Icon) {
+            val speaker = Path().apply {
+                moveTo(3f, 9f); lineTo(7f, 9f); lineTo(12f, 5f); lineTo(12f, 19f)
+                lineTo(7f, 15f); lineTo(3f, 15f); close()
+            }
+            canvas.drawPath(speaker, paint)
+            when (icon) {
+                Icon.MUTE -> {
+                    canvas.drawLine(16f, 9f, 21f, 15f, paint)
+                    canvas.drawLine(21f, 9f, 16f, 15f, paint)
+                }
+                Icon.VOLUME_UP -> {
+                    canvas.drawArc(RectF(11f, 6f, 20f, 18f), -55f, 110f, false, paint)
+                    canvas.drawArc(RectF(10f, 2f, 24f, 22f), -55f, 110f, false, paint)
+                }
+                else -> canvas.drawArc(RectF(11f, 6f, 20f, 18f), -55f, 110f, false, paint)
+            }
+        }
+
+        private fun arrow(canvas: Canvas, x1: Float, y1: Float, x2: Float, y2: Float) {
             canvas.drawLine(x1, y1, x2, y2, paint)
             val path = Path()
             when {
                 x1 == x2 && y2 < y1 -> {
-                    path.moveTo(x2, y2); path.lineTo(x2 - 5f, y2 + 5f); path.moveTo(x2, y2); path.lineTo(x2 + 5f, y2 + 5f)
+                    path.moveTo(x2, y2); path.lineTo(x2 - 5f, y2 + 5f)
+                    path.moveTo(x2, y2); path.lineTo(x2 + 5f, y2 + 5f)
                 }
                 x1 == x2 -> {
-                    path.moveTo(x2, y2); path.lineTo(x2 - 5f, y2 - 5f); path.moveTo(x2, y2); path.lineTo(x2 + 5f, y2 - 5f)
+                    path.moveTo(x2, y2); path.lineTo(x2 - 5f, y2 - 5f)
+                    path.moveTo(x2, y2); path.lineTo(x2 + 5f, y2 - 5f)
                 }
                 x2 < x1 -> {
-                    path.moveTo(x2, y2); path.lineTo(x2 + 5f, y2 - 5f); path.moveTo(x2, y2); path.lineTo(x2 + 5f, y2 + 5f)
+                    path.moveTo(x2, y2); path.lineTo(x2 + 5f, y2 - 5f)
+                    path.moveTo(x2, y2); path.lineTo(x2 + 5f, y2 + 5f)
                 }
                 else -> {
-                    path.moveTo(x2, y2); path.lineTo(x2 - 5f, y2 - 5f); path.moveTo(x2, y2); path.lineTo(x2 - 5f, y2 + 5f)
+                    path.moveTo(x2, y2); path.lineTo(x2 - 5f, y2 - 5f)
+                    path.moveTo(x2, y2); path.lineTo(x2 - 5f, y2 + 5f)
                 }
             }
             canvas.drawPath(path, paint)
         }
-
-        companion object {
-            private const val BACKGROUND = 0xff090a0b.toInt()
-            private const val SURFACE = 0xff151719.toInt()
-            private const val SURFACE_RAISED = 0xff202326.toInt()
-            private const val DIAL = 0xff101214.toInt()
-            private const val DIAL_BUTTON = 0xff282b2e.toInt()
-            private const val SELECTED = 0xff302a1d.toInt()
-            private const val EDGE = 0xff2b2e30.toInt()
-            private const val EDGE_GOLD = 0xff4a402b.toInt()
-            private const val GOLD = 0xffd9bd7a.toInt()
-            private const val TEXT = 0xfff3f0e8.toInt()
-            private const val MUTED = 0xff909397.toInt()
-            private const val MUTED_DOT = 0xff62666a.toInt()
-            private const val CONNECTED = 0xff9dbb9e.toInt()
-            private const val ERROR = 0xffe08a80.toInt()
-        }
     }
 
-    companion object {
-        private const val BACKGROUND = 0xff090a0b.toInt()
-        private const val SURFACE = 0xff151719.toInt()
-        private const val SURFACE_RAISED = 0xff202326.toInt()
-        private const val DIAL = 0xff101214.toInt()
-        private const val DIAL_BUTTON = 0xff282b2e.toInt()
-        private const val SELECTED = 0xff302a1d.toInt()
-        private const val EDGE = 0xff2b2e30.toInt()
-        private const val EDGE_GOLD = 0xff4a402b.toInt()
-        private const val GOLD = 0xffd9bd7a.toInt()
-        private const val TEXT = 0xfff3f0e8.toInt()
-        private const val MUTED = 0xff909397.toInt()
-        private const val MUTED_DOT = 0xff62666a.toInt()
-        private const val CONNECTED = 0xff9dbb9e.toInt()
-        private const val ERROR = 0xffe08a80.toInt()
-
-        private fun pressFeedback(view: View, event: android.view.MotionEvent): Boolean {
-            when (event.actionMasked) {
-                android.view.MotionEvent.ACTION_DOWN -> view.animate().scaleX(0.96f).scaleY(0.96f).setDuration(90).start()
-                android.view.MotionEvent.ACTION_UP, android.view.MotionEvent.ACTION_CANCEL -> view.animate().scaleX(1f).scaleY(1f).setDuration(120).start()
-            }
-            return false
+    private fun pressFeedback(view: View, event: MotionEvent): Boolean {
+        when (event.actionMasked) {
+            MotionEvent.ACTION_DOWN -> view.animate().scaleX(0.97f).scaleY(0.97f).setDuration(90).start()
+            MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL ->
+                view.animate().scaleX(1f).scaleY(1f).setDuration(130).start()
         }
+        return false
+    }
+
+    private companion object {
+        const val BACKGROUND = 0xff090a0d.toInt()
+        const val SURFACE = 0xff17191f.toInt()
+        const val SURFACE_RAISED = 0xff22252d.toInt()
+        const val EDGE = 0xff30333b.toInt()
+        const val EDGE_GOLD = 0xff514832.toInt()
+        const val SELECTED = 0xff393321.toInt()
+        const val GOLD = 0xffd6b477.toInt()
+        const val SOFT_GOLD = 0xffe9d5a3.toInt()
+        const val TEXT = 0xfff4f1e9.toInt()
+        const val MUTED = 0xff9699a1.toInt()
+        const val MUTED_DOT = 0xff60636b.toInt()
+        const val CONNECTED = 0xff9ec6a6.toInt()
+        const val ERROR = 0xfff08c83.toInt()
     }
 }
