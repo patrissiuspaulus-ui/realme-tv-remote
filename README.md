@@ -1,6 +1,6 @@
 # Realme TV Remote
 
-Aplikasi remote Android native untuk TV yang menjalankan Android TV Remote Service v2, termasuk Realme Android TV dan Google TV yang menyediakan service tersebut. Versi saat ini 2.0.0 (versionCode 3).
+Aplikasi remote Android native untuk TV yang menjalankan Android TV Remote Service v2, termasuk Realme Android TV dan Google TV yang menyediakan service tersebut. Versi saat ini 2.0.1 (versionCode 4).
 
 ## Fitur
 
