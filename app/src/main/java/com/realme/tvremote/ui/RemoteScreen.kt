@@ -78,7 +78,6 @@ class RemoteScreen(
         indeterminateTintList = ColorStateList.valueOf(GOLD)
     }
     private val scanButton: View
-    private val homeConnectLabel: TextView
     private val devicesConnectLabel: TextView
     private val remotePage = LinearLayout(context).apply { orientation = LinearLayout.VERTICAL }
     private val devicesPage = LinearLayout(context).apply { orientation = LinearLayout.VERTICAL }
@@ -91,8 +90,6 @@ class RemoteScreen(
 
     init {
         val header = buildHeader()
-        val homeButton = primaryButton("PAIR DENGAN TV", onConnect)
-        homeConnectLabel = homeButton.second
         val devicesButton = primaryButton("PAIR DENGAN TV", onConnect)
         devicesConnectLabel = devicesButton.second
         scanButton = buildScanButton()
@@ -116,7 +113,7 @@ class RemoteScreen(
         pageHost.addView(remotePage, pageParams)
         pageHost.addView(devicesPage, FrameLayout.LayoutParams(pageParams))
         pageHost.addView(settingsPage, FrameLayout.LayoutParams(pageParams))
-        buildRemotePage(homeButton.first)
+        buildRemotePage()
         buildDevicesPage(devicesButton.first)
         buildSettingsPage()
         content.addView(pageHost, fullWidthTopMargin(10))
@@ -157,10 +154,8 @@ class RemoteScreen(
             state.paired -> "HUBUNGKAN KE TV"
             else -> "PAIR DENGAN TV"
         }
-        homeConnectLabel.text = connectionText
         devicesConnectLabel.text = connectionText
         val canConnect = !state.busy && state.selectedDevice != null
-        homeConnectLabel.parentAsView().isEnabled = canConnect
         devicesConnectLabel.parentAsView().isEnabled = canConnect
 
         renderDevices(state)
@@ -207,19 +202,8 @@ class RemoteScreen(
         addView(label("ANDROID TV  ·  REMOTE V2", 8, MUTED, bold = true, spacing = 0.04f))
     }
 
-    private fun buildRemotePage(connectButton: View) {
-        remotePage.addView(
-            label("KONTROL TV", 9, GOLD, bold = true, spacing = 0.16f),
-            topMargin(15),
-        )
-        remotePage.addView(label("Semua kendali,\nsatu sentuhan.", 26, TEXT, bold = true), topMargin(5))
-        remotePage.addView(
-            label("Nikmati pengalaman menonton yang lebih nyaman.", 12, MUTED),
-            topMargin(5),
-        )
-        remotePage.addView(sectionHeading("PERANGKAT AKTIF", "JARINGAN LOKAL"), fullWidthTopMargin(22))
-        remotePage.addView(buildDeviceCard(connectButton), fullWidthParams())
-        remotePage.addView(sectionHeading("REMOTE CONTROL", "NAVIGASI PRESISI"), fullWidthTopMargin(22))
+    private fun buildRemotePage() {
+        remotePage.addView(sectionHeading("NAVIGASI", "REMOTE CONTROL"), fullWidthTopMargin(10))
         remotePage.addView(buildDirectionalPad(), fullWidthTopMargin(12))
         remotePage.addView(sectionHeading("AKSES CEPAT", "KONTROL UTAMA"), fullWidthTopMargin(22))
         remotePage.addView(buildQuickControls(), fullWidthTopMargin(3))
@@ -501,20 +485,8 @@ class RemoteScreen(
             label("Temukan TV yang terhubung ke jaringan Wi-Fi yang sama.", 12, MUTED),
             topMargin(5),
         )
-        val scanAction = LinearLayout(context).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-            addView(IconView(Icon.SCAN, GOLD), params(18, 18))
-            addView(label("CARI PERANGKAT", 10, GOLD, bold = true, spacing = 0.04f), topMarginHorizontal(8))
-            setPadding(dp(14), dp(12), dp(14), dp(12))
-            background = ripple(SURFACE, 14)
-            isClickable = true
-            isFocusable = true
-            contentDescription = "Cari perangkat TV"
-            setOnClickListener { onScan() }
-            setOnTouchListener { view, event -> pressFeedback(view, event) }
-        }
-        devicesPage.addView(scanAction, fullWidthTopMargin(20))
+        devicesPage.addView(sectionHeading("PERANGKAT AKTIF", "STATUS KONEKSI"), fullWidthTopMargin(20))
+        devicesPage.addView(buildDeviceCard(connectButton), fullWidthTopMargin(9))
         devicesPage.addView(sectionHeading("TERDETEKSI", "PILIH PERANGKAT"), fullWidthTopMargin(21))
         val listCard = LinearLayout(context).apply {
             orientation = LinearLayout.VERTICAL
@@ -523,7 +495,6 @@ class RemoteScreen(
             addView(deviceList, fullWidthParams())
         }
         devicesPage.addView(listCard, fullWidthParams())
-        devicesPage.addView(connectButton, fullWidthTopMargin(14))
         devicesPage.addView(
             label("Pastikan ponsel dan TV berada di jaringan lokal yang sama.", 10, MUTED),
             fullWidthTopMargin(10),
